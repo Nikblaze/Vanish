@@ -1314,7 +1314,7 @@ void main() {
     KAMUI: { id: 'KAMUI', label: 'Kamui (vortex)', needsMask: false, needsBackgroundPlate: false, defaultAnchor: { x: 0.45, y: 0.35 }, draw: fxKamui, sound: soundKamui },
     HOLLOW_RED: { id: 'HOLLOW_RED', label: 'Red (fused orbs)', needsMask: false, needsBackgroundPlate: false, defaultAnchor: { x: 0.5, y: 0.5 }, draw: fxRed, sound: soundRed },
     HOLLOW_PURPLE: { id: 'HOLLOW_PURPLE', label: 'Purple (black hole)', needsMask: false, needsBackgroundPlate: false, armSteady: 0.05, defaultAnchor: { x: 0.5, y: 0.45 }, draw: fxPurple, sound: soundPurple },
-    REVERSAL_RED: { id: 'REVERSAL_RED', label: 'Reversal (red beam)', needsMask: false, needsBackgroundPlate: false, armSteady: 0.05, defaultAnchor: { x: 0.55, y: 0.45 }, draw: fxReversal, sound: soundReversal },
+    REVERSAL_RED: { id: 'REVERSAL_RED', label: 'Reversal (red beam)', needsMask: false, needsBackgroundPlate: false, armSteady: 0.08, defaultAnchor: { x: 0.55, y: 0.45 }, draw: fxReversal, sound: soundReversal },
   };
 
   function renderFx(ctx, w, h, video, tmp, now) {

@@ -14,7 +14,7 @@ Works on **Microsoft Teams web** (`teams.microsoft.com`, `teams.live.com`, `team
 | **Kamui**: index, middle and ring fingers laid over one eye | **Kamui**: a dark spinning vortex opens around your visible eye, the view zooms in as it spirals faster, then a black core swallows the frame |
 | **Hollow Red**: both hands pointing with just the index finger, index tips held close together | **Red**: a red orb on one fingertip and a blue orb on the other spiral into each other and fuse into a crimson singularity that bends light and swallows the frame; black with a fading crimson ring |
 | **Hollow Purple**: one hand making a V, index and middle spread apart, thumb out to the side, ring + pinky curled, hand raised and held still | **Purple**: violet lightning gathers in the gap between the fingers, condenses with a shockwave into a black sphere with a blazing photon ring, grows into a black hole with a glowing accretion disk that swallows the frame; black with a fading purple ring |
-| **Reversal Red**: finger gun, thumb up, index pointing at the camera (or angled), middle/ring/pinky curled, hand raised and held still | **Reversal**: a red dot charges on your fingertip with sparks and crackling arcs, a recoil flash, then a beam fires at the viewer and burns a hole that floods the screen red; near-black red |
+| **Reversal Red**: finger gun, thumb up, index pointing at the camera (or angled), middle/ring/pinky curled, held still (anywhere in the frame) | **Reversal**: a red dot charges on your fingertip with sparks and crackling arcs, a recoil flash, then a beam fires at the viewer and burns a hole that floods the screen red; near-black red |
 
 All visuals and sounds are generated in code. No third-party character art, clips, or audio are included.
 
@@ -58,7 +58,7 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 | Cancel reverse animation | `CANCEL_MS` in `inject.js` | `600` ms |
 | Preview length | `TEST_MS` in `inject.js` | `4000` ms |
 | Anchor smoothing (weight of newest anchor) | `ANCHOR_EMA` in `inject.js` | `0.5` |
-| Steady-arming radius (per effect, optional `armSteady`, normalized frame units) | `FX` in `inject.js` | `HOLLOW_PURPLE`, `REVERSAL_RED`: `0.05`; others none |
+| Steady-arming radius (per effect, optional `armSteady`, normalized frame units) | `FX` in `inject.js` | `HOLLOW_PURPLE`: `0.05`, `REVERSAL_RED`: `0.08`; others none |
 | Detector start delay | `sendTick()` in `inject.js` | `4000` ms after camera start |
 | Gesture thresholds | `TH` at the top of `detector.js` | see below |
 
@@ -100,8 +100,8 @@ Gesture thresholds (`TH`, ratios of hand/face size, so scale-invariant):
 | `FWD_SHORT` | `0.55` | `fwdExt`: ...or 2D tip–MCP length below `FWD_SHORT × hand size` (foreshortened but straight) |
 | `HP_THUMB` | `0.6` | Hollow Purple: thumb out to the side, `dist(tip4, mcp5) > HP_THUMB × hand size` (separates the V from a plain peace sign, whose thumb is tucked; Gojo never checks the thumb) |
 | `HP_SPREAD` | `1.15` | Hollow Purple: index/middle tips spread in a V, `dist(tip8, tip12) > HP_SPREAD × palm`. Gojo's "together" is below `GOJO_TOGETHER` (0.9) × palm, so 0.9–1.15 is a dead zone where neither fires |
-| `RR_THUMB_UP` | `0.25` | Reversal Red: thumb tip above the index MCP by more than `RR_THUMB_UP × hand size` (thumb up; plain pointing has it tucked) |
-| `RR_THUMB_OUT` | `0.45` | Reversal Red: thumb not lying along the index, `dist(tip4, mcp5) > RR_THUMB_OUT × hand size` |
+| `RR_THUMB_UP` | `0.1` | Reversal Red: thumb tip above the index MCP by more than `RR_THUMB_UP × hand size` (thumb up; plain pointing has it tucked) |
+| `RR_THUMB_OUT` | `0.35` | Reversal Red: thumb not lying along the index, `dist(tip4, mcp5) > RR_THUMB_OUT × hand size` |
 
 ---
 
@@ -152,7 +152,7 @@ Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected). Rules l
 - **Hollow Red**: two hands, each with only the index finger extended (middle, ring, pinky curled), index tips closer than `HR_TIPS` × mean hand size. Static pose; the red/blue orbs start on the left/right tips (by x)
 - **Hollow Purple**: one hand making a V: index + middle extended (via the shared `fwdExt` helper, which also accepts fingers pointing at the lens: PIP not bent and the tip nearer the camera than its knuckle, or foreshortened) and spread apart (`HP_SPREAD`), with the same left/right order as the knuckles (Gojo's crossed variant has it swapped), ring + pinky curled, thumb out to the side (`HP_THUMB`, which excludes a plain peace sign), wrist not in `LOW_ZONE`. Gojo needs the tips together (< 0.9 × palm) or crossed, so the two are disjoint, with a 0.9–1.15 dead zone; this rule is still checked first. Rejected when both tips sit in the Instant Transmission forehead zone. The effect anchors in the gap between the fingers and arms with steady-arming (`armSteady`): the anchor must stay within 0.05 of where arming started, else the arming timer restarts, so a casual "counting three" gesture doesn't trigger it
 
-- **Reversal Red**: one-hand finger gun. Index extended via `fwdExt` (accepts pointing at the lens), middle/ring/pinky curled via the plain 2D test (`fwdExt`'s "short but straight" path reads folded fingers as extended), thumb up (`RR_THUMB_UP`) and out (`RR_THUMB_OUT`), wrist not in `LOW_ZONE`. Thumb up separates it from plain pointing (thumb tucked); the extended index separates it from thumbs-up (index curled). Placed before Hollow Purple (its `fwdExt` can misread a curled middle, letting a finger gun pass as a V) and Bankai (whose fist test tolerates one extended finger). Anchors on the index tip; steady-arming (`armSteady`) like Hollow Purple
+- **Reversal Red**: one-hand finger gun. Index extended via `fwdExt` (accepts pointing at the lens), middle/ring/pinky curled via the plain 2D test (`fwdExt`'s "short but straight" path reads folded fingers as extended), thumb up (`RR_THUMB_UP`) and out (`RR_THUMB_OUT`), anywhere in the frame (no `LOW_ZONE`). Bankai rejects this shape (index plainly extended with the thumb above its knuckle). Thumb up separates it from plain pointing (thumb tucked); the extended index separates it from thumbs-up (index curled). Placed before Hollow Purple (its `fwdExt` can misread a curled middle, letting a finger gun pass as a V) and Bankai (whose fist test tolerates one extended finger). Anchors on the index tip; steady-arming (`armSteady`) like Hollow Purple
 
 ### 4. State machine
 ```
