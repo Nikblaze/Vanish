@@ -8,6 +8,13 @@ Works on **Microsoft Teams web** (`teams.microsoft.com`, `teams.live.com`, `team
 |---|---|
 | Index + middle finger on your forehead | **Instant Transmission**: fingertip glow, flicker, you vanish from the frame |
 | Index + middle crossed (or pressed together), hand raised | **Domain Expansion**: black void expands from your hand, starfield, everything goes dark |
+| **Room**: one hand palm-down, all five fingers spread and curved down like an upside-down bowl, hand above the bottom quarter of the frame | **Room**: particle ring, cyan dome expands past the frame, frame is sliced into tiles, you get scattered, tiles drift apart into black. Needs captured background |
+| **Shadow Clone**: both hands, index + middle pressed together on each, one pair vertical and the other horizontal forming a "+", crossing near their middles | **Shadow clone**: smoke puffs leave copies of you, the copies multiply, then everyone (you included) bursts into smoke and the room is empty. Needs captured background |
+| **Bankai**: one closed fist raised beside your head at about eye level, back of the hand to the camera, normal distance | **Bankai**: dark red aura rises around you, the room darkens, debris lifts, a black-red blade of light shoots horizontally out of your fist, then a slash splits the frame apart into black |
+| **Kamui**: index, middle and ring fingers laid over one eye | **Kamui**: a dark spinning vortex opens around your visible eye, the view zooms in as it spirals faster, then a black core swallows the frame |
+| **Hollow Red**: both hands pointing with just the index finger, index tips held close together | **Red**: a red orb on one fingertip and a blue orb on the other spiral into each other and fuse into a crimson singularity that bends light and swallows the frame; black with a fading crimson ring |
+| **Hollow Purple**: one hand making a V, index and middle spread apart, thumb out to the side, ring + pinky curled, hand raised and held still | **Purple**: violet lightning gathers in the gap between the fingers, condenses with a shockwave into a black sphere with a blazing photon ring, grows into a black hole with a glowing accretion disk that swallows the frame; black with a fading purple ring |
+| **Reversal Red**: finger gun, thumb up, index pointing at the camera (or angled), middle/ring/pinky curled, held still (anywhere in the frame) | **Reversal**: a red dot charges on your fingertip with sparks and crackling arcs, a recoil flash, then a beam fires at the viewer and burns a hole that floods the screen red; near-black red |
 
 All visuals and sounds are generated in code. No third-party character art, clips, or audio are included.
 
@@ -29,15 +36,16 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 4. Hold a gesture ~0.7 s → effect starts and a local-only countdown appears.
    - Hold for 5 s → the extension clicks Leave.
    - Remove your hand for > 1 s → effect reverses, you stay in the call.
+5. To turn a gesture off, expand the **`TLFX ●`** pill → **Gestures** and untick it (persisted in `localStorage` key `tlfx-off`).
 
 ### Console helpers (DevTools on the meeting tab)
 
 | Command | What it does |
 |---|---|
-| `__tlfxTest('INSTANT_TRANSMISSION')` / `__tlfxTest('GOJO')` | Preview an effect for 4 s. **Never leaves.** |
-| `__tlfxSound('INSTANT_TRANSMISSION')` / `__tlfxSound('GOJO')` | Play just the sound for 3 s |
+| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`, `ROOM`, `SHADOW_CLONE`, `BANKAI`, `KAMUI`, `HOLLOW_RED`, `HOLLOW_PURPLE`, `REVERSAL_RED`; e.g. `__tlfxTest('BANKAI')`); ignores the Gestures toggles |
+| `__tlfxSound(id)` | Play just the sound for 3 s (same ids) |
 | `__tlfx()` | Dump internal state (detector status, frames sent, state machine, mic mixing) |
-| `window.__tlfxDebug = true` | Draw gesture label, hand landmarks and forehead zone onto the video |
+| `window.__tlfxDebug = true` | Draw onto the video: gesture + confidence, state / candidate / active effect, both hands' skeletons, rule zones, the smoothed anchor, and loose (hysteresis) matches |
 | `localStorage.setItem('tlfx-mixmic','0')` + refresh | Disable mixing effect sounds into your mic |
 
 ## Configuration
@@ -45,10 +53,55 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 | Setting | Where | Default |
 |---|---|---|
 | Hold time before leaving | `LEAVE_MS` in `inject.js` | `5000` ms |
-| Arming time | `onResult()` in `inject.js` | `700` ms |
-| Cancel grace period | `step()` in `inject.js` | `1000` ms |
+| Arming time | `ARM_MS` in `inject.js` | `700` ms |
+| Cancel grace period (gap) | `GAP_MS` in `inject.js` | `1000` ms |
+| Cancel reverse animation | `CANCEL_MS` in `inject.js` | `600` ms |
+| Preview length | `TEST_MS` in `inject.js` | `4000` ms |
+| Anchor smoothing (weight of newest anchor) | `ANCHOR_EMA` in `inject.js` | `0.5` |
+| Steady-arming radius (per effect, optional `armSteady`, normalized frame units) | `FX` in `inject.js` | `HOLLOW_PURPLE`: `0.05`, `REVERSAL_RED`: `0.08`; others none |
 | Detector start delay | `sendTick()` in `inject.js` | `4000` ms after camera start |
-| Gesture thresholds | `classify()` in `detector.js` | see code |
+| Gesture thresholds | `TH` at the top of `detector.js` | see below |
+
+Gesture thresholds (`TH`, ratios of hand/face size, so scale-invariant):
+
+| Name | Default | Meaning |
+|---|---|---|
+| `EXT` | `1.1` | finger extended: `dist(tip, wrist) > dist(pip, wrist) × EXT` |
+| `EXT_MIDDLE` | `1.0` | looser test for the middle finger |
+| `FOREHEAD_R` | `0.35` | forehead zone radius, fraction of face width |
+| `IT_TIP_R` | `1.6` | Instant Transmission: both tips within `FOREHEAD_R × IT_TIP_R` of forehead centre |
+| `GOJO_CROSS` | `1.5` | Gojo crossed: tips swapped vs knuckles and within `palm × GOJO_CROSS` |
+| `GOJO_TOGETHER` | `0.9` | Gojo together: `dist(tip8, tip12) < palm × GOJO_TOGETHER` |
+| `LOW_ZONE` | `0.25` | shared: gestures need the wrist above the bottom `LOW_ZONE` of the frame (no desk/typing hands) |
+| `ROOM_EXT` | `1.0` | Room: looser finger-extended ratio (fingers curve down into a bowl) |
+| `ROOM_NY` | `0.55` | Room: `\|palm normal · y\| / \|normal\|`, palm plane roughly horizontal (palm down) |
+| `ROOM_NY_LOOSE` | `0.4` | Room hysteresis |
+| `ROOM_TIP_DROP` | `0.1` | Room: fingertip below its MCP by more than `ROOM_TIP_DROP × hand size` (curved down) |
+| `ROOM_TIPS_DOWN` | `3` | Room: at least this many of index..pinky tips dropped |
+| `ROOM_SPREAD` | `1.3` | Room: `dist(tip8, tip20) > ROOM_SPREAD × dist(mcp5, mcp17)`, fingers fanned |
+| `ROOM_THUMB` | `0.5` | Room: thumb spread, `dist(tip4, mcp5) > ROOM_THUMB × hand size` |
+| `SC_TOGETHER` | `1.0` | Shadow Clone: index+middle pressed together on each hand, `dist(tip8, tip12) < palm × SC_TOGETHER` |
+| `SC_PERP_COS` | `0.45` | Shadow Clone: `\|cos\|` between the two finger directions below this (≈ 63°–117°, a "+") |
+| `SC_AXIS` | `0.75` | Shadow Clone: one pair within ~41° of vertical, the other within ~41° of horizontal |
+| `SC_NEAR` | `3` | Shadow Clone / Gojo: a second hand with its wrist within `SC_NEAR × hand size` counts as a seal attempt and blocks Gojo. In the seal, the partly hidden hand only needs its index up (ring + pinky curled); the other needs the full two-finger pose |
+| `SC_CROSS` | `0.7` | Shadow Clone: finger-segment midpoints closer than `SC_CROSS × mean finger length` |
+| `BK_MAX_EXT` | `1` | Bankai: a "fist" has at most this many of index..pinky extended |
+| `BK_EYE` | `0.7` | Bankai: fist palm centre at most this × face width below the eye line |
+| `BK_SIDE` | `0.5` | Bankai: palm centre beside the head, more than this × face width from the nose (not in front of the face) |
+| `BK_EYE_LOOSE` | `1.0` | Bankai hysteresis |
+| `BK_NOFACE_Y` | `0.35` | Bankai with no face detected: palm centre in the top 35% of the frame |
+| `BK_THUMB_UP` | `0.5` | Bankai: rejects thumbs-up (thumb tip above index MCP by more than this × knuckle width) |
+| `KM_TIP_R` | `0.35` | Kamui: centroid of the index/middle/ring tips within this × face width of one eye |
+| `KM_TIP_R_LOOSE` | `0.6` | Kamui hysteresis (2 of the 3 fingers may stay extended) |
+| `HR_TIPS` | `0.6` | Hollow Red: index tips closer than this × mean hand size. Static pose, no approach check |
+| `HR_TIPS_LOOSE` | `1.0` | Hollow Red hysteresis: both index fingers up (≤ 2 extended each), tips within this × mean hand size |
+| `FWD_STRAIGHT` | `0.6` | shared `fwdExt`: finger pointing at the camera counts as extended if 3D `cos((pip−mcp), (tip−pip))` is above this (PIP not bent) |
+| `FWD_Z` | `0.25` | `fwdExt`: ...and tip closer to the camera than its MCP by more than `FWD_Z × hand size` (MediaPipe z, smaller = closer) |
+| `FWD_SHORT` | `0.55` | `fwdExt`: ...or 2D tip–MCP length below `FWD_SHORT × hand size` (foreshortened but straight) |
+| `HP_THUMB` | `0.6` | Hollow Purple: thumb out to the side, `dist(tip4, mcp5) > HP_THUMB × hand size` (separates the V from a plain peace sign, whose thumb is tucked; Gojo never checks the thumb) |
+| `HP_SPREAD` | `1.15` | Hollow Purple: index/middle tips spread in a V, `dist(tip8, tip12) > HP_SPREAD × palm`. Gojo's "together" is below `GOJO_TOGETHER` (0.9) × palm, so 0.9–1.15 is a dead zone where neither fires |
+| `RR_THUMB_UP` | `0.1` | Reversal Red: thumb tip above the index MCP by more than `RR_THUMB_UP × hand size` (thumb up; plain pointing has it tucked) |
+| `RR_THUMB_OUT` | `0.35` | Reversal Red: thumb not lying along the index, `dist(tip4, mcp5) > RR_THUMB_OUT × hand size` |
 
 ---
 
@@ -85,13 +138,21 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 Audio: mic → WebAudio `MediaStreamSource` + effect bus → `MediaStreamDestination` → returned to the app. If the `AudioContext` isn't `running`, the raw mic is returned unchanged.
 
 ### 2. Detection off the main page
-Teams' CSP blocks wasm compilation in the page, so MediaPipe runs in an extension-origin iframe. Frames are downscaled to 320 px and transferred as `ImageBitmap` (zero-copy) with a `busy` flag for backpressure. The face model runs only when a hand shows two raised fingers; the segmenter only for Instant Transmission.
+Teams' CSP blocks wasm compilation in the page, so MediaPipe runs in an extension-origin iframe. Frames are downscaled to 320 px and transferred as `ImageBitmap` (zero-copy) with a `busy` flag for backpressure. The face model runs lazily, once per frame and only when a rule asks for it (e.g. Instant Transmission with a two-finger hand); the segmenter only for Instant Transmission.
 
 ### 3. Gesture rules
-Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected):
+Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected). Rules live in an ordered `RULES` list in `detector.js`; two-hand rules are evaluated before one-hand rules, the first match wins, and each rule has a `match()` plus a looser `loose()` for hysteresis. All thresholds live in `TH`.
 - finger extended: `dist(tip, wrist) > dist(pip, wrist) × 1.1`
 - **Instant Transmission**: index + middle up, ring + pinky down, both tips inside the forehead zone (face landmarks 10/151, radius from face width)
-- **Gojo**: same finger pose, tips crossed (left/right order swapped vs. knuckles) or pressed together
+- **Gojo**: same finger pose, tips crossed (left/right order swapped vs. knuckles) or pressed together. Ignored when another hand's wrist is within `SC_NEAR × hand size`, so a cross seal (even with one hand partly hidden) never reads as Gojo
+- **Shadow Clone**: two hands, each index+middle up and pressed together; each pair is one segment (knuckle mid to tip mid), the two are near-perpendicular (`|cos|`), one near-vertical and one near-horizontal, and cross near their middles
+- **Room**: palm normal `(lm5−lm0)×(lm17−lm0)` mostly vertical (`|ny|`, orientation-agnostic), ≥3 fingertips below their knuckles (palm-down bowl, not palm-up cup), fingers fanned (`tip8↔tip20` vs `mcp5↔mcp17`), thumb spread, wrist not in the bottom `LOW_ZONE`
+- **Bankai**: one closed fist (≤ `BK_MAX_EXT` of index..pinky extended), thumb not up, raised beside the head: palm centre at/above the eye line (`BK_EYE`) and to the side of the face (`BK_SIDE`). The face model runs only when a fist is visible
+- **Kamui**: index, middle and ring extended with their fingertip centroid within `KM_TIP_R` face widths of one eye (face model, only for a hand with at least 2 of those fingers up in the top 70% of the frame); the effect centres on the other eye
+- **Hollow Red**: two hands, each with only the index finger extended (middle, ring, pinky curled), index tips closer than `HR_TIPS` × mean hand size. Static pose; the red/blue orbs start on the left/right tips (by x)
+- **Hollow Purple**: one hand making a V: index + middle extended (via the shared `fwdExt` helper, which also accepts fingers pointing at the lens: PIP not bent and the tip nearer the camera than its knuckle, or foreshortened) and spread apart (`HP_SPREAD`), with the same left/right order as the knuckles (Gojo's crossed variant has it swapped), ring + pinky curled, thumb out to the side (`HP_THUMB`, which excludes a plain peace sign), wrist not in `LOW_ZONE`. Gojo needs the tips together (< 0.9 × palm) or crossed, so the two are disjoint, with a 0.9–1.15 dead zone; this rule is still checked first. Rejected when both tips sit in the Instant Transmission forehead zone. The effect anchors in the gap between the fingers and arms with steady-arming (`armSteady`): the anchor must stay within 0.05 of where arming started, else the arming timer restarts, so a casual "counting three" gesture doesn't trigger it
+
+- **Reversal Red**: one-hand finger gun. Index extended via `fwdExt` (accepts pointing at the lens), middle/ring/pinky curled via the plain 2D test (`fwdExt`'s "short but straight" path reads folded fingers as extended), thumb up (`RR_THUMB_UP`) and out (`RR_THUMB_OUT`), anywhere in the frame (no `LOW_ZONE`). Bankai rejects this shape (index plainly extended with the thumb above its knuckle). Thumb up separates it from plain pointing (thumb tucked); the extended index separates it from thumbs-up (index curled). Placed before Hollow Purple (its `fwdExt` can misread a curled middle, letting a finger gun pass as a V) and Bankai (whose fist test tolerates one extended finger). Anchors on the index tip; steady-arming (`armSteady`) like Hollow Purple
 
 ### 4. State machine
 ```
@@ -100,10 +161,13 @@ IDLE ──held 700ms──▶ ACTIVE ──no hold >1s──▶ CANCELLING ─�
                        ▼
                     LEAVING ── click Leave ── camera stops ──▶ IDLE
 ```
-Arming delay, gap tolerance, hysteresis (once active, two raised fingers are enough), and stale-result rejection keep detection flicker from causing false triggers or early cancels.
+Arming delay, gap tolerance, hysteresis (once active, the rule's `loose` test is enough to keep it held), and stale-result rejection keep detection flicker from causing false triggers or early cancels.
+
+### Adding a gesture
+Add a rule (same `id`) to `RULES` in `detector.js` and an effect to `FX` in `inject.js` (`draw`, `sound`, `defaultAnchor`, flags). It appears in the Gestures toggles automatically.
 
 ### 5. Effects
-Canvas 2D compositing. Vanish = background plate masked to the person silhouette (`destination-in`), brightness-matched to the live frame to cancel camera auto-exposure, then the full plate once fully vanished. Void = expanding clip circle, seeded starfield, gradients. A local page overlay shows the countdown (only you see it).
+Canvas 2D compositing. Vanish = background plate masked to the person silhouette (`destination-in`), brightness-matched to the live frame to cancel camera auto-exposure, then the full plate once fully vanished. Kamui and Hollow Red's singularity warp the frame with one shared WebGL fragment shader (spiral bands, tint and rim colour are parameters) (one texture upload + one draw per frame; created lazily, falls back permanently to a 2D stepped-swirl of clipped rotated/scaled rings if WebGL is unavailable or the context is lost). Void = expanding clip circle, seeded starfield, gradients. A local page overlay shows the countdown (only you see it).
 
 ---
 

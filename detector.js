@@ -74,30 +74,240 @@ function segment(bmp, ts) {
   }
 }
 
-// ar = frame width/height; x is scaled by ar so distances are isotropic.
-function classify(lms, faceLms, ar) {
-  const P = (l) => ({ x: l.x * ar, y: l.y });
-  let forehead = null, center = null, r = 0;
-  if (faceLms) {
-    const a = P(faceLms[10]), b = P(faceLms[151]);
-    center = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    r = d(P(faceLms[234]), P(faceLms[454])) * 0.35;
-    forehead = { x: center.x / ar, y: center.y, r: r / ar };
+// Gesture thresholds. Ratios of hand/face size, so scale-invariant. Final tuned values are recorded in README.
+const TH = {
+  EXT: 1.1,           // finger extended: dist(tip, wrist) > dist(pip, wrist) * EXT
+  EXT_MIDDLE: 1.0,    // middle finger uses a looser test (often slightly bent in two-finger poses)
+  FOREHEAD_R: 0.35,   // forehead zone radius, fraction of face width (face landmarks 234↔454)
+  IT_TIP_R: 1.6,      // INSTANT_TRANSMISSION: both tips within FOREHEAD_R * IT_TIP_R of forehead centre
+  GOJO_CROSS: 1.5,    // GOJO crossed: tip order swapped vs knuckles AND tips within palm * GOJO_CROSS
+  GOJO_TOGETHER: 0.9, // GOJO together: dist(tip8, tip12) < palm * GOJO_TOGETHER (palm = dist(lm5, lm9))
+  LOW_ZONE: 0.25,        // shared: gestures need the wrist above the bottom LOW_ZONE of the frame (no desk/typing hands)
+  // ROOM palm normal = (lm5-lm0) x (lm17-lm0) in aspect-corrected 3D. We use |ny| (orientation-agnostic, no handedness
+  // needed): palm facing camera puts the normal on z, sideways on x, palm up/down on y. "Tips below MCPs" then
+  // separates palm-down (bowl) from palm-up (cup).
+  ROOM_EXT: 1.0,         // ROOM: looser finger-extended ratio (fingers are curved down into a bowl)
+  ROOM_NY: 0.55,         // ROOM: |palm normal . y| / |normal| — palm plane roughly horizontal (palm down)
+  ROOM_NY_LOOSE: 0.4,    // ROOM hysteresis
+  ROOM_TIP_DROP: 0.1,    // ROOM: fingertip must be below its MCP by > ROOM_TIP_DROP * hs (curved down)
+  ROOM_TIPS_DOWN: 3,     // ROOM: at least this many of index..pinky tips dropped
+  ROOM_SPREAD: 1.3,      // ROOM: dist(tip8, tip20) > ROOM_SPREAD * dist(mcp5, mcp17) — fingers fanned
+  ROOM_THUMB: 0.5,       // ROOM: thumb spread — dist(tip4, mcp5) > ROOM_THUMB * hs
+  SC_TOGETHER: 1.0, // SHADOW_CLONE: index+middle pressed together on each hand: dist(tip8, tip12) < palm * SC_TOGETHER
+  SC_PERP_COS: 0.45,// SHADOW_CLONE: |cos| between the two finger directions < this (≈ 63°–117°, a "+")
+  SC_AXIS: 0.75,    // SHADOW_CLONE: one pair within ~41° of vertical (|vy|/len > SC_AXIS), the other within ~41° of horizontal
+  SC_NEAR: 3,       // SHADOW_CLONE/GOJO: another hand with its wrist within SC_NEAR * hs = seal attempt, so GOJO is blocked
+  BK_MAX_EXT: 1,    // BANKAI: a "fist" has at most this many of index..pinky extended (one misread finger tolerated)
+  BK_EYE: 0.7,      // BANKAI: fist palm centre at most BK_EYE * face width below the eye line (fist raised to head height;
+                    //         palm centre includes the wrist so it sits ~0.45 below the eyes with the fist at eye level)
+  BK_SIDE: 0.5,     // BANKAI: palm centre beside the head, |dx| from nose > BK_SIDE * face width (not in front of the face:
+                    //         rules out adjusting glasses, chin on fist, drinking)
+  BK_EYE_LOOSE: 1.0,// BANKAI hysteresis: palm may drop to this * face width below the eye line
+  BK_NOFACE_Y: 0.35,// BANKAI without a detected face: palm centre in the top BK_NOFACE_Y of the frame
+  BK_THUMB_UP: 0.5, // BANKAI: reject thumbs-up — thumb tip above index MCP by > BK_THUMB_UP * knuckle width
+  KM_TIP_R: 0.35,     // KAMUI: centroid of index/middle/ring tips within KM_TIP_R * face width of one eye centre
+  KM_TIP_R_LOOSE: 0.6, // KAMUI hysteresis (and only 2 of the 3 fingers need to stay extended)
+  HR_TIPS: 0.6,       // HOLLOW_RED: index tips closer than HR_TIPS * mean hand size (hs). Static pose, no approach check.
+  HR_TIPS_LOOSE: 1.0, // HOLLOW_RED hysteresis: both index fingers up (≤ 2 extended each), tips within this * mean hs
+  FWD_STRAIGHT: 0.6, // finger pointing at the camera: 3D cos between (pip−mcp) and (tip−pip) > this (PIP not bent)
+  FWD_Z: 0.25,       // ...and tip closer to the camera than its MCP by FWD_Z * hs (MediaPipe z: smaller = closer)
+  FWD_SHORT: 0.55,   // ...or 2D tip–MCP length < FWD_SHORT * hs (foreshortened but straight)
+  HP_THUMB: 0.6,  // HOLLOW_PURPLE: thumb out to the side — d(tip4, idxMCP5) > HP_THUMB * hs (GOJO's thumb is tucked; GOJO never checks it)
+  HP_SPREAD: 1.15, // HOLLOW_PURPLE: index/middle tips spread in a V — d(tip8, tip12) > HP_SPREAD * palm. GOJO "together" is
+                  //  < GOJO_TOGETHER (0.9) * palm, so 0.9–1.15 is a dead zone where neither fires.
+  RR_THUMB_UP: 0.1,  // REVERSAL_RED: thumb tip above the index MCP by > RR_THUMB_UP * hs (thumb up — plain pointing has it tucked)
+  RR_THUMB_OUT: 0.35,// REVERSAL_RED: thumb not lying along the index: d(tip4, mcp5) > RR_THUMB_OUT * hs
+  SC_CROSS: 0.7,    // SHADOW_CLONE: finger-segment midpoints closer than SC_CROSS * mean finger length (crossing near their middles)
+};
+
+// ar = frame width/height; x is scaled by ar so distances are isotropic (z too, same scale as x).
+function prepHand(raw, ar, score) {
+  const lm = raw.map((l) => ({ x: l.x * ar, y: l.y, z: l.z * ar }));
+  const ext = (tip, pip, k = TH.EXT) => d(lm[tip], lm[0]) > d(lm[pip], lm[0]) * k;
+  const e = { i: ext(8, 6), m: ext(12, 10, TH.EXT_MIDDLE), r: ext(16, 14), p: ext(20, 18) };
+  return { raw, lm, score, palm: d(lm[5], lm[9]), hs: d(lm[0], lm[9]), extK: (tip, pip, k) => ext(tip, pip, k), ext: e, twoUp: e.i && e.m && !e.r && !e.p };
+}
+const tipMid = (h) => ({ x: (h.raw[8].x + h.raw[12].x) / 2, y: (h.raw[8].y + h.raw[12].y) / 2 });
+const palmMid = (h) => { const p = [0, 5, 9, 13, 17].map((i) => h.raw[i]); return { x: p.reduce((a, l) => a + l.x, 0) / 5, y: p.reduce((a, l) => a + l.y, 0) / 5 }; };
+// Foreshortening-tolerant "extended": plain 2D ext fails when a finger points at the lens; a curled finger is rejected by
+// the PIP-bend check. Cached on h._fx.
+const cos3 = (a, b, c, e) => { const u = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z }, v = { x: e.x - c.x, y: e.y - c.y, z: e.z - c.z }; return (u.x * v.x + u.y * v.y + u.z * v.z) / ((Math.hypot(u.x, u.y, u.z) * Math.hypot(v.x, v.y, v.z)) || 1e-6); };
+function fwdExt(h) {
+  if (h._fx) return h._fx;
+  const lm = h.lm, f = {};
+  for (const [k, mcp, pip, tip] of [['i', 5, 6, 8], ['m', 9, 10, 12], ['r', 13, 14, 16], ['p', 17, 18, 20]])
+    f[k] = h.ext[k] || (cos3(lm[mcp], lm[pip], lm[pip], lm[tip]) > TH.FWD_STRAIGHT && (lm[tip].z < lm[mcp].z - TH.FWD_Z * h.hs || d(lm[tip], lm[mcp]) < TH.FWD_SHORT * h.hs));
+  return (h._fx = f);
+}
+function roomMetrics(h) {
+  if (h._room) return h._room;
+  const lm = h.lm, a = { x: lm[5].x - lm[0].x, y: lm[5].y - lm[0].y, z: lm[5].z - lm[0].z }, b = { x: lm[17].x - lm[0].x, y: lm[17].y - lm[0].y, z: lm[17].z - lm[0].z };
+  const n = { x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x };
+  return (h._room = {
+    ny: Math.abs(n.y) / (Math.hypot(n.x, n.y, n.z) || 1),
+    drops: [[8, 5], [12, 9], [16, 13], [20, 17]].filter(([t, m]) => lm[t].y > lm[m].y + TH.ROOM_TIP_DROP * h.hs).length,
+    spread: d(lm[8], lm[20]) / (d(lm[5], lm[17]) || 1),
+    thumb: d(lm[4], lm[5]) / (h.hs || 1),
+    nExt: [[8, 6], [12, 10], [16, 14], [20, 18]].filter(([t, p]) => h.extK(t, p, TH.ROOM_EXT)).length,
+    low: h.raw[0].y > 1 - TH.LOW_ZONE });
+}
+const roomHit = (h) => { const t = [8, 12, 16, 20].map((i) => h.raw[i]).reduce((a, l) => (l.y > a.y ? l : a)); // lowest fingertip
+  return { anchor: palmMid(h), anchors: { wrist: { x: h.raw[0].x, y: h.raw[0].y }, mid: { x: h.raw[9].x, y: h.raw[9].y }, tip: { x: t.x, y: t.y } } }; };
+
+// SHADOW_CLONE: two-hand cross seal. fingerSeg = index+middle pair as one segment (knuckle mid -> tip mid), lm space.
+// In the seal one hand's middle finger is often hidden behind the other hand, so a hand only needs its index up
+// (ring+pinky curled) — `pairish`; at least one hand must be fully twoUp. Hidden middle → index-only segment.
+const pairish = (h) => h.ext.i && !h.ext.r && !h.ext.p;
+function fingerSeg(h) {
+  const lm = h.lm, m = h.ext.m, a = m ? { x: (lm[5].x + lm[9].x) / 2, y: (lm[5].y + lm[9].y) / 2 } : lm[5], b = m ? { x: (lm[8].x + lm[12].x) / 2, y: (lm[8].y + lm[12].y) / 2 } : lm[8];
+  const v = { x: b.x - a.x, y: b.y - a.y };
+  return { v, len: Math.hypot(v.x, v.y) || 1e-6, m: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } };
+}
+function scMetrics(h1, h2) {
+  const s1 = fingerSeg(h1), s2 = fingerSeg(h2);
+  const vert = (s) => Math.abs(s.v.y) / s.len > TH.SC_AXIS, horiz = (s) => Math.abs(s.v.x) / s.len > TH.SC_AXIS;
+  const tog = (h) => !h.ext.m || d(h.lm[8], h.lm[12]) < h.palm * TH.SC_TOGETHER;
+  return { ok2: pairish(h1) && pairish(h2) && (h1.twoUp || h2.twoUp),
+    tog: tog(h1) && tog(h2),
+    cos: Math.abs(s1.v.x * s2.v.x + s1.v.y * s2.v.y) / (s1.len * s2.len),
+    axis: (vert(s1) && horiz(s2)) || (vert(s2) && horiz(s1)),
+    cross: d(s1.m, s2.m) / ((s1.len + s2.len) / 2),
+    len: (s1.len + s2.len) / 2,
+    c: { x: (s1.m.x + s2.m.x) / 2, y: (s1.m.y + s2.m.y) / 2 } };
+}
+
+// HOLLOW_RED: both hands pointing with only the index finger, tips held together. lm space (aspect-corrected).
+const idxOnly = (h) => h.ext.i && !h.ext.m && !h.ext.r && !h.ext.p;
+function hrMetrics(h1, h2, F) {
+  const hs = (h1.hs + h2.hs) / 2, td = d(h1.lm[8], h2.lm[8]) / hs, [l, r] = [h1.raw[8], h2.raw[8]].sort((a, b) => a.x - b.x);
+  const mid = { x: (l.x + r.x) / 2, y: (l.y + r.y) / 2 };
+  return { hs, td, mid, hit: { anchor: mid, anchors: { red: { x: l.x, y: l.y }, blue: { x: r.x, y: r.y } } } };
+}
+
+// BANKAI: one closed fist raised beside the head (palm at/above eye level), normal distance, works seated.
+const nExt = (h) => +h.ext.i + +h.ext.m + +h.ext.r + +h.ext.p;
+const fist = (h) => nExt(h) <= TH.BK_MAX_EXT;
+function bkMetrics(h, F) {
+  const pc = palmMid(h), f = F.face(), kw = d(h.lm[5], h.lm[17]);
+  let dy = null, side = null; // dy, side in face widths (dy > 0 = below the eye line)
+  if (f) {
+    const fw = d({ x: f[234].x * F.ar, y: f[234].y }, { x: f[454].x * F.ar, y: f[454].y }) || 1e-6;
+    dy = (pc.y - (f[33].y + f[263].y) / 2) / fw; side = Math.abs(pc.x - f[1].x) * F.ar / fw;
   }
-  let tip = null;
-  const tipOf = (raw) => ({ x: (raw[8].x + raw[12].x) / 2, y: (raw[8].y + raw[12].y) / 2 });
-  for (const t of lms) {
-    const lm = t.lm;
-    const instant = center && d(lm[8], center) < r * 1.6 && d(lm[12], center) < r * 1.6;
-    if (instant) return { gesture: 'INSTANT_TRANSMISSION', forehead, tip: tipOf(t.raw), twoUp: true };
-    const palm = d(lm[5], lm[9]);
-    const crossed = Math.sign(lm[8].x - lm[12].x) !== Math.sign(lm[5].x - lm[9].x) && d(lm[8], lm[12]) < palm * 1.5;
-    const together = d(lm[8], lm[12]) < palm * 0.9;
-    if (crossed || together)
-      return { gesture: 'GOJO', forehead, tip: tipOf(t.raw), twoUp: true };
-    tip ||= tipOf(t.raw);
+  // blade leaves the thumb side of the fist (index MCP side), horizontally, at the height of the curled fingers
+  const r = h.raw, by = [5, 6, 9, 10, 13, 14, 17, 18].reduce((a, i) => a + r[i].y, 0) / 8;
+  return { dy, side, thumbUp: h.lm[4].y < h.lm[5].y - TH.BK_THUMB_UP * kw,
+    hit: { anchor: pc, anchors: { blade: { x: r[5].x, y: by }, dir: { x: Math.sign(r[5].x - r[17].x) || 1, y: 0 } } } };
+}
+
+// KAMUI: index, middle and ring fingers extended and laid over one eye. Distances in aspect-corrected lm space, in
+// face widths. The anchor is the other (visible) eye.
+function kmMetrics(h, F) {
+  const n3 = +h.ext.i + +h.ext.m + +h.ext.r;
+  if (n3 < 2) return null; // cheap pre-filter so the face model isn't run for every hand
+  const tc = [8, 12, 16].reduce((o, i) => ({ x: o.x + h.lm[i].x / 3, y: o.y + h.lm[i].y / 3 }), { x: 0, y: 0 });
+  if (tc.y >= 0.7) return null;
+  const f = F.face();
+  if (!f) return null;
+  const P = (l) => ({ x: l.x * F.ar, y: l.y }), mid = (a, b) => ({ x: (f[a].x + f[b].x) / 2, y: (f[a].y + f[b].y) / 2 });
+  const fw = d(P(f[234]), P(f[454])) || 1e-6, eA = mid(33, 133), eB = mid(362, 263);
+  const dA = d(tc, P(eA)) / fw, dB = d(tc, P(eB)) / fw, aCov = dA <= dB;
+  return { n3, dCov: Math.min(dA, dB), vis: aCov ? eB : eA, cov: aCov ? eA : eB, fw };
+}
+
+// HOLLOW_PURPLE anchor: the gap between the fingers. v = V vertex (knuckle mid), t = tip mid; orb sits 65% of the way up.
+function hpHit(h) {
+  const r = h.raw, v = { x: (r[5].x + r[9].x) / 2, y: (r[5].y + r[9].y) / 2 }, t = { x: (r[8].x + r[12].x) / 2, y: (r[8].y + r[12].y) / 2 };
+  return { anchor: { x: v.x + 0.65 * (t.x - v.x), y: v.y + 0.65 * (t.y - v.y) }, anchors: { i: { x: r[8].x, y: r[8].y }, m: { x: r[12].x, y: r[12].y } } };
+}
+
+// Ordered rule list. Two-hand rules are always evaluated before one-hand rules (sorted below) so a two-hand
+// pose is never read as a one-hand one. match() returns null or { anchor, anchors? } (normalized frame coords).
+// loose() is the hysteresis test used once the gesture is ACTIVE (a looser version of the pose); same return shape.
+const RULES = [
+  { id: 'SHADOW_CLONE', hands: 2,
+    match(h1, h2, F) { const m = scMetrics(h1, h2);
+      if (m.ok2) F.zones.push({ x: m.c.x / F.ar, y: m.c.y, r: m.len, label: 'SC cos ' + m.cos.toFixed(2) + ' ax ' + +m.axis + ' x ' + m.cross.toFixed(2) + ' tog ' + +m.tog });
+      return m.ok2 && m.tog && m.cos < TH.SC_PERP_COS && m.axis && m.cross < TH.SC_CROSS ? { anchor: { x: m.c.x / F.ar, y: m.c.y } } : null; },
+    loose(h1, h2, F) { if (!pairish(h1) || !pairish(h2)) return null; const c = scMetrics(h1, h2).c; return { anchor: { x: c.x / F.ar, y: c.y } }; } },
+  { id: 'HOLLOW_RED', hands: 2,
+    match(h1, h2, F) { const m = hrMetrics(h1, h2, F);
+      if (h1.ext.i && h2.ext.i) F.zones.push({ x: m.mid.x, y: m.mid.y, r: TH.HR_TIPS * m.hs / 2, label: 'HR tips ' + m.td.toFixed(2) + ' (<' + TH.HR_TIPS + ') idx ' + +idxOnly(h1) + +idxOnly(h2) });
+      return idxOnly(h1) && idxOnly(h2) && m.td < TH.HR_TIPS ? m.hit : null; },
+    loose(h1, h2, F) { if (!h1.ext.i || !h2.ext.i || nExt(h1) > 2 || nExt(h2) > 2) return null; const m = hrMetrics(h1, h2, F); return m.td < TH.HR_TIPS_LOOSE ? m.hit : null; } },
+  // Finger gun: thumb up, index extended (any direction, incl. at the lens), middle/ring/pinky curled. Before HOLLOW_PURPLE and BANKAI:
+  // fwdExt can read a curled middle as extended (finger gun would pass as a V), and BANKAI's fist tolerates one finger;
+  // this rule needs the middle plainly curled, which a V never has. Thumbs-up is excluded (index curled), plain pointing too (thumb not up).
+  { id: 'REVERSAL_RED', hands: 1,
+    match(h, F) { const fx = fwdExt(h), lm = h.lm, up = (lm[5].y - lm[4].y) / h.hs, out = d(lm[4], lm[5]) / h.hs;
+      if (fx.i) F.zones.push({ x: h.raw[8].x, y: h.raw[8].y, r: 0.4 * h.hs, label: `RR i ${+fx.i} mrp ${+h.ext.m}${+h.ext.r}${+h.ext.p} up ${up.toFixed(2)} out ${out.toFixed(2)}` });
+      // curled check uses the plain 2D test: fwdExt's "short but straight" path reads folded fingers as extended (found on HOLLOW_PURPLE)
+      return fx.i && !h.ext.m && !h.ext.r && !h.ext.p && up > TH.RR_THUMB_UP && out > TH.RR_THUMB_OUT ? { anchor: { x: h.raw[8].x, y: h.raw[8].y } } : null; },
+    loose(h) { return fwdExt(h).i && h.lm[4].y < h.lm[5].y ? { anchor: { x: h.raw[8].x, y: h.raw[8].y } } : null; } },
+  { id: 'BANKAI', hands: 1,
+    // a plainly extended index with the thumb above its knuckle is a finger gun (REVERSAL_RED), never a fist
+    match(h, F) { if (nExt(h) > 2 || (h.ext.i && h.lm[4].y < h.lm[5].y)) return null; const m = bkMetrics(h, F), pc = m.hit.anchor;
+      F.zones.push({ x: pc.x, y: pc.y, r: h.hs, label: 'BK ext ' + nExt(h) + ' th ' + +m.thumbUp + (m.dy == null ? ' noface' : ' dy ' + m.dy.toFixed(2) + ' side ' + m.side.toFixed(2)) });
+      const raised = m.dy == null ? pc.y < TH.BK_NOFACE_Y : m.dy < TH.BK_EYE && m.side > TH.BK_SIDE;
+      return fist(h) && !m.thumbUp && raised ? m.hit : null; },
+    loose(h, F) { if (nExt(h) > 2) return null; const m = bkMetrics(h, F);
+      return (m.dy == null ? m.hit.anchor.y < TH.BK_NOFACE_Y + 0.15 : m.dy < TH.BK_EYE_LOOSE) ? m.hit : null; } },
+  { id: 'KAMUI', hands: 1,
+    match(h, F) { const m = kmMetrics(h, F); if (!m) return null;
+      F.zones.push({ x: m.cov.x, y: m.cov.y, r: TH.KM_TIP_R * m.fw, label: 'KM tips ' + m.dCov.toFixed(2) + ' fingers ' + m.n3 + '/3' });
+      return m.n3 === 3 && m.dCov < TH.KM_TIP_R ? { anchor: m.vis, anchors: { cov: m.cov } } : null; },
+    loose(h, F) { const m = kmMetrics(h, F); return m && m.dCov < TH.KM_TIP_R_LOOSE ? { anchor: m.vis, anchors: { cov: m.cov } } : null; } },
+  { id: 'INSTANT_TRANSMISSION', hands: 1,
+    match(h, F) { if (!h.twoUp) return null; const fz = F.forehead(); if (!fz) return null; const R = fz.r * TH.IT_TIP_R; return d(h.lm[8], fz.c) < R && d(h.lm[12], fz.c) < R ? { anchor: tipMid(h) } : null; },
+    loose: (h) => h.twoUp ? { anchor: tipMid(h) } : null },
+  // V sign (index + middle spread). The V spread plus uncrossed finger order separates it from GOJO (together or crossed);
+  // the thumb out to the side separates it from a plain peace sign (thumb tucked over ring/pinky).
+  { id: 'HOLLOW_PURPLE', hands: 1,
+    match(h, F) { const fx = fwdExt(h), lm = h.lm, thumb = d(lm[4], lm[5]) / h.hs, spread = d(lm[8], lm[12]) / h.palm, low = palmMid(h).y > 1 - TH.LOW_ZONE, tm = tipMid(h);
+      const notCrossed = Math.sign(lm[8].x - lm[12].x) === Math.sign(lm[5].x - lm[9].x);
+      if (fx.i && fx.m) F.zones.push({ x: tm.x, y: tm.y, r: 0.5 * h.hs, label: `HP i m r p ${+fx.i}${+fx.m}${+h.ext.r}${+h.ext.p} th ${thumb.toFixed(2)} sp ${spread.toFixed(2)}` });
+      // curled check uses the plain 2D test: fwdExt's "short but straight" path reads a folded ring/pinky as extended
+      if (!(fx.i && fx.m && !h.ext.r && !h.ext.p && thumb > TH.HP_THUMB && spread > TH.HP_SPREAD && notCrossed && !low)) return null;
+      const fz = F.forehead(), R = fz && fz.r * TH.IT_TIP_R; // tips on the forehead = INSTANT_TRANSMISSION
+      return fz && d(lm[8], fz.c) < R && d(lm[12], fz.c) < R ? null : hpHit(h); },
+    loose(h) { const fx = fwdExt(h); return fx.i && fx.m && palmMid(h).y <= 1 - TH.LOW_ZONE ? hpHit(h) : null; } },
+  { id: 'GOJO', hands: 1,
+    // a second hand close by = a (maybe partly hidden) SHADOW_CLONE seal, never one-hand GOJO
+    match(h, F) { if (!h.twoUp || F.hands.some((x) => x !== h && d(x.lm[0], h.lm[0]) < TH.SC_NEAR * h.hs)) return null; const lm = h.lm, t = d(lm[8], lm[12]);
+      const crossed = Math.sign(lm[8].x - lm[12].x) !== Math.sign(lm[5].x - lm[9].x) && t < h.palm * TH.GOJO_CROSS;
+      return crossed || t < h.palm * TH.GOJO_TOGETHER ? { anchor: tipMid(h) } : null; },
+    loose: (h) => h.twoUp ? { anchor: tipMid(h) } : null },
+  { id: 'ROOM', hands: 1,
+    match(h, F) { const m = roomMetrics(h);
+      if (m.nExt >= 3) { const c = palmMid(h); F.zones.push({ x: c.x, y: c.y, r: h.hs, label: 'ROOM ny ' + m.ny.toFixed(2) + ' sp ' + m.spread.toFixed(2) + ' th ' + m.thumb.toFixed(2) + ' dn ' + m.drops }); }
+      return !m.low && m.nExt === 4 && m.ny > TH.ROOM_NY && m.drops >= TH.ROOM_TIPS_DOWN && m.spread > TH.ROOM_SPREAD && m.thumb > TH.ROOM_THUMB ? roomHit(h) : null; },
+    loose(h) { const m = roomMetrics(h); return !m.low && m.ny > TH.ROOM_NY_LOOSE && m.nExt >= 3 ? roomHit(h) : null; } },
+].sort((a, b) => b.hands - a.hands); // stable: two-hand first, otherwise list order
+
+// hands = prepped list, off = Set of disabled ids. Also returns `loose`: hysteresis matches for every enabled rule.
+function classify(hands, F, off) {
+  if (!hands.length) return { gesture: 'no-hand', loose: {} };
+  const run = (rule, fn) => {
+    if (rule.hands === 2) {
+      if (hands.length < 2) return null;
+      const r = fn(hands[0], hands[1], F);
+      return r && { ...r, confidence: Math.min(hands[0].score, hands[1].score) };
+    }
+    for (const h of hands) { const r = fn(h, F); if (r) return { ...r, confidence: h.score }; }
+    return null;
+  };
+  let out = { gesture: 'none' };
+  const loose = {};
+  for (const rule of RULES) {
+    if (off.has(rule.id)) continue;
+    if (out.gesture === 'none') {
+      const r = run(rule, rule.match);
+      if (r) out = { gesture: rule.id, anchor: r.anchor, anchors: r.anchors, confidence: r.confidence };
+    }
+    const l = run(rule, rule.loose);
+    if (l) loose[rule.id] = { anchor: l.anchor, anchors: l.anchors };
   }
-  return { gesture: 'none', forehead, tip, twoUp: true };
+  return { ...out, loose };
 }
 
 window.addEventListener('message', (event) => {
@@ -115,16 +325,21 @@ window.addEventListener('message', (event) => {
     lastTs = ts;
     const hr = hand.detectForVideo(bmp, ts);
     const ar = bmp.width / bmp.height;
-    const hands = hr.landmarks || [];
-    // twoUp = index+middle extended, ring+pinky curled. Face runs only when some hand is twoUp.
-    const up = [];
-    for (const raw of hands) {
-      const lm = raw.map((l) => ({ x: l.x * ar, y: l.y }));
-      const ext = (tip, pip, k = 1.1) => d(lm[tip], lm[0]) > d(lm[pip], lm[0]) * k;
-      if (ext(8, 6) && ext(12, 10, 1.0) && !ext(16, 14) && !ext(20, 18)) up.push({ lm, raw });
-    }
-    let out = { gesture: hands.length ? 'none' : 'no-hand', forehead: null, tip: null, twoUp: false };
-    if (up.length) out = classify(up, face.detectForVideo(bmp, ts).faceLandmarks?.[0], ar);
+    const raws = hr.landmarks || [];
+    const hands = raws.map((raw, i) => prepHand(raw, ar, hr.handedness?.[i]?.[0]?.score ?? 1));
+    const P = (l) => ({ x: l.x * ar, y: l.y });
+    const F = { ar, hands, zones: [], _f: undefined, _fz: undefined,
+      face() { if (this._f === undefined) this._f = face.detectForVideo(bmp, ts).faceLandmarks?.[0] || null; return this._f; }, // lazy: only when a rule asks
+      forehead() {
+        if (this._fz !== undefined) return this._fz;
+        const f = this.face();
+        if (!f) return (this._fz = null);
+        const a = P(f[10]), b = P(f[151]), c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        const r = d(P(f[234]), P(f[454])) * TH.FOREHEAD_R;
+        this.zones.push({ x: c.x / ar, y: c.y, r, label: 'forehead' }, { x: c.x / ar, y: c.y, r: r * TH.IT_TIP_R, label: 'IT tips' });
+        return (this._fz = { c, r });
+      } };
+    const out = classify(hands, F, new Set(m.off || []));
     let mask = null;
     if (m.wantMask) {
       ensureSeg();
@@ -136,7 +351,7 @@ window.addEventListener('message', (event) => {
     while (stamps.length && now - stamps[0] > 2000) stamps.shift();
     const fps = Math.round((stamps.length / 2) * 10) / 10;
     const msg = { ...out, fps };
-    if (m.debug) msg.hands = hands.flat().map(({ x, y }) => ({ x, y }));
+    if (m.debug) { msg.hands = raws.map((raw) => raw.map(({ x, y }) => ({ x, y }))); msg.zones = F.zones; }
     if (mask) msg.mask = mask;
     event.source.postMessage({ type: 'tlfx:result', ...msg }, event.origin, mask ? [mask.buf] : []);
   } catch (e) {
