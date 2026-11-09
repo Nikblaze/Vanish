@@ -12,6 +12,7 @@ Works on **Microsoft Teams web** (`teams.microsoft.com`, `teams.live.com`, `team
 | **Shadow Clone**: both hands, index + middle pressed together on each, one pair vertical and the other horizontal forming a "+", crossing near their middles | **Shadow clone**: smoke puffs leave copies of you, the copies multiply, then everyone (you included) bursts into smoke and the room is empty. Needs captured background |
 | **Bankai**: one closed fist raised beside your head at about eye level, back of the hand to the camera, normal distance | **Bankai**: dark red aura rises around you, the room darkens, debris lifts, a black-red blade of light shoots horizontally out of your fist, then a slash splits the frame apart into black |
 | **Kamui**: index, middle and ring fingers laid over one eye | **Kamui**: a dark spinning vortex opens around your visible eye, the view zooms in as it spirals faster, then a black core swallows the frame |
+| **Hollow Red**: both hands pointing with just the index finger, index tips held close together | **Red**: a red orb on one fingertip and a blue orb on the other spiral into each other and fuse into a crimson singularity that bends light and swallows the frame; black with a fading crimson ring |
 
 All visuals and sounds are generated in code. No third-party character art, clips, or audio are included.
 
@@ -39,7 +40,7 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 
 | Command | What it does |
 |---|---|
-| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`, `ROOM`, `SHADOW_CLONE`, `BANKAI`, `KAMUI`; e.g. `__tlfxTest('BANKAI')`); ignores the Gestures toggles |
+| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`, `ROOM`, `SHADOW_CLONE`, `BANKAI`, `KAMUI`, `HOLLOW_RED`; e.g. `__tlfxTest('BANKAI')`); ignores the Gestures toggles |
 | `__tlfxSound(id)` | Play just the sound for 3 s (same ids) |
 | `__tlfx()` | Dump internal state (detector status, frames sent, state machine, mic mixing) |
 | `window.__tlfxDebug = true` | Draw onto the video: gesture + confidence, state / candidate / active effect, both hands' skeletons, rule zones, the smoothed anchor, and loose (hysteresis) matches |
@@ -89,6 +90,8 @@ Gesture thresholds (`TH`, ratios of hand/face size, so scale-invariant):
 | `BK_THUMB_UP` | `0.5` | Bankai: rejects thumbs-up (thumb tip above index MCP by more than this × knuckle width) |
 | `KM_TIP_R` | `0.35` | Kamui: centroid of the index/middle/ring tips within this × face width of one eye |
 | `KM_TIP_R_LOOSE` | `0.6` | Kamui hysteresis (2 of the 3 fingers may stay extended) |
+| `HR_TIPS` | `0.6` | Hollow Red: index tips closer than this × mean hand size. Static pose, no approach check |
+| `HR_TIPS_LOOSE` | `1.0` | Hollow Red hysteresis: both index fingers up (≤ 2 extended each), tips within this × mean hand size |
 
 ---
 
@@ -136,6 +139,7 @@ Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected). Rules l
 - **Room**: palm normal `(lm5−lm0)×(lm17−lm0)` mostly vertical (`|ny|`, orientation-agnostic), ≥3 fingertips below their knuckles (palm-down bowl, not palm-up cup), fingers fanned (`tip8↔tip20` vs `mcp5↔mcp17`), thumb spread, wrist not in the bottom `LOW_ZONE`
 - **Bankai**: one closed fist (≤ `BK_MAX_EXT` of index..pinky extended), thumb not up, raised beside the head: palm centre at/above the eye line (`BK_EYE`) and to the side of the face (`BK_SIDE`). The face model runs only when a fist is visible
 - **Kamui**: index, middle and ring extended with their fingertip centroid within `KM_TIP_R` face widths of one eye (face model, only for a hand with at least 2 of those fingers up in the top 70% of the frame); the effect centres on the other eye
+- **Hollow Red**: two hands, each with only the index finger extended (middle, ring, pinky curled), index tips closer than `HR_TIPS` × mean hand size. Static pose; the red/blue orbs start on the left/right tips (by x)
 
 ### 4. State machine
 ```
@@ -150,7 +154,7 @@ Arming delay, gap tolerance, hysteresis (once active, the rule's `loose` test is
 Add a rule (same `id`) to `RULES` in `detector.js` and an effect to `FX` in `inject.js` (`draw`, `sound`, `defaultAnchor`, flags). It appears in the Gestures toggles automatically.
 
 ### 5. Effects
-Canvas 2D compositing. Vanish = background plate masked to the person silhouette (`destination-in`), brightness-matched to the live frame to cancel camera auto-exposure, then the full plate once fully vanished. Kamui warps the frame with a WebGL fragment shader (one texture upload + one draw per frame; created lazily, falls back permanently to a 2D stepped-swirl of clipped rotated/scaled rings if WebGL is unavailable or the context is lost). Void = expanding clip circle, seeded starfield, gradients. A local page overlay shows the countdown (only you see it).
+Canvas 2D compositing. Vanish = background plate masked to the person silhouette (`destination-in`), brightness-matched to the live frame to cancel camera auto-exposure, then the full plate once fully vanished. Kamui and Hollow Red's singularity warp the frame with one shared WebGL fragment shader (spiral bands, tint and rim colour are parameters) (one texture upload + one draw per frame; created lazily, falls back permanently to a 2D stepped-swirl of clipped rotated/scaled rings if WebGL is unavailable or the context is lost). Void = expanding clip circle, seeded starfield, gradients. A local page overlay shows the countdown (only you see it).
 
 ---
 

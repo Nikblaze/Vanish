@@ -847,7 +847,7 @@
   // tangential motion blur (5 taps), dark log-spiral bands flowing with the spin, purple-dark tint, vignette,
   // and a black core with a faint glowing rim that grows until it swallows the frame.
   const KM_FS = `precision mediump float;
-uniform sampler2D t; uniform vec2 res, c; uniform float ang, rad, s, dark, ph, vort, core, blur;
+uniform sampler2D t; uniform vec2 res, c; uniform float ang, rad, s, dark, ph, vort, core, blur, bands; uniform vec3 rimc;
 vec3 smp(vec2 p, float a, float k) {
   float cs = cos(a), sn = sin(a);
   vec2 uv = (vec2(cs * p.x - sn * p.y, sn * p.x + cs * p.y) * k + c) / res;
@@ -860,12 +860,12 @@ void main() {
   float a = (ang + ph) * f2, k = (1.0 + 1.2 * vort * f2) / s, b = blur * f;
   vec3 col = (2.0 * smp(p, a, k) + smp(p, a - b, k) + smp(p, a + b, k) + smp(p, a - 2.0 * b, k * 1.01) + smp(p, a + 2.0 * b, k * 0.99)) / 6.0;
   float sp = sin(3.0 * atan(p.y, p.x) + 7.0 * log(r) + ph * 3.0);
-  col *= 1.0 - 0.6 * vort * smoothstep(0.2, 1.0, sp) * smoothstep(0.0, 0.25, f);
-  col = mix(col, col * vec3(0.55, 0.45, 0.7), 0.5 * vort * f);
+  col *= 1.0 - 0.6 * vort * bands * smoothstep(0.2, 1.0, sp) * smoothstep(0.0, 0.25, f);
+  col = mix(col, col * vec3(0.55, 0.45, 0.7), 0.5 * vort * f * bands);
   col *= 1.0 - dark * smoothstep(0.15, 1.0, r / length(res));
   col *= smoothstep(core, core * 1.6 + 2.0, r);
   float rd = (r - core * 1.3) / (core * 0.25 + 3.0), rim = exp(-rd * rd); // (pow() is undefined for negative bases)
-  col += vec3(0.35, 0.25, 0.5) * rim * vort * 0.6;
+  col += rimc * rim * vort;
   gl_FragColor = vec4(col, 1.0);
 }`;
   let kmGL; // undefined = not tried, false = off for good, object = ready
@@ -884,7 +884,7 @@ void main() {
     const al = gl.getAttribLocation(prog, 'a'); gl.enableVertexAttribArray(al); gl.vertexAttribPointer(al, 2, gl.FLOAT, false, 0, 0);
     const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
     for (const [k, v] of [[gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE], [gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
-    const u = {}; for (const n of ['res', 'c', 'ang', 'rad', 's', 'dark', 'ph', 'vort', 'core', 'blur']) u[n] = gl.getUniformLocation(prog, n);
+    const u = {}; for (const n of ['res', 'c', 'ang', 'rad', 's', 'dark', 'ph', 'vort', 'core', 'blur', 'bands', 'rimc']) u[n] = gl.getUniformLocation(prog, n);
     return { cv, gl, prog, tex, u };
   }
   function kmWarp(ctx, W, H, C, k) { // true if the GL warp was drawn
@@ -900,6 +900,7 @@ void main() {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, ctx.canvas);
       gl.uniform2f(u.res, W, H); gl.uniform2f(u.c, C.x, H - C.y);
       for (const n of ['ang', 'rad', 's', 'dark', 'ph', 'vort', 'core', 'blur']) gl.uniform1f(u[n], k[n]);
+      gl.uniform1f(u.bands, k.bands ?? 1); gl.uniform3f(u.rimc, ...(k.rimc || [0.21, 0.15, 0.3]));
       gl.drawArrays(gl.TRIANGLES, 0, 6);
       ctx.drawImage(cv, 0, 0, W, H);
       return true;
@@ -957,6 +958,77 @@ void main() {
     osc('sine', 60, 25, at(0.97), 0.5, 0.6); noise(at(0.97), 0.15, node('lowpass', 300), 0.4); // collapse thump
   }
 
+  // HOLLOW_RED timeline (p 0→1 over the hold; reversed on cancel):
+  //  charge 0–0.40   a red orb grows on one index tip and a blue orb on the other, each with an inward particle swirl
+  //  build  0.40–0.85 the orbs leave the tips and spiral into each other (0.40–0.75), fuse with a flash into a crimson
+  //                  singularity with a black centre (0.75), which bends light around it (WebGL lens) and grows
+  //  climax 0.85–1.0 the singularity swallows the frame into black
+  //  end    p = 1    black screen with a faint crimson ring fading out while Leave is clicked
+  // The singularity reuses the Kamui lens (kmWarp) with bands off and a crimson rim.
+  const HR_PT = (() => { const r = mkRnd(66); return Array.from({ length: 24 }, () => ({ a0: r() * 6.283, ph: r(), sp: 0.7 + r() * 0.6 })); })();
+  function fxRed(ctx, f, p, a, s) {
+    const W = f.w, H = f.h, now = f.now, diag = Math.hypot(W, H), m = s.mem;
+    if (p <= 0) return;
+    const ring = (x, y, r, lw, c) => { ctx.strokeStyle = c; ctx.lineWidth = lw; ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.stroke(); };
+    const an = s.anchors || {}, px = (q, dx) => q ? { x: q.x * W, y: q.y * H } : { x: a.x * W + dx, y: a.y * H };
+    const A = px(an.red, -0.05 * W), B = px(an.blue, 0.05 * W), M = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+    if (p >= 1) {
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      ring(M.x, M.y, 0.12 * H, 3, `rgba(230,20,60,${0.5 * Math.max(0, 1 - ((s.t || 0) - LEAVE_MS) / 1500)})`);
+      ctx.restore(); return;
+    }
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    if (p < 0.76) { // orbs (charge, then spiral into each other)
+      const ro = 0.035 * H * ease(seg(p, 0.02, 0.35)) * (1 + 0.06 * Math.sin(now / 90)), q = ease(seg(p, 0.4, 0.75)), al = 1 - seg(p, 0.72, 0.76);
+      if (ro > 0.5) ctx.globalAlpha = al, [[A, 0, '255,120,120', 'rgba(255,60,60,0.45)', ['rgba(255,235,235,1)', 'rgba(255,40,40,0.95)', 'rgba(255,0,0,0)']],
+        [B, 1, '140,180,255', 'rgba(80,140,255,0.45)', ['rgba(235,245,255,1)', 'rgba(60,130,255,0.95)', 'rgba(0,60,255,0)']]].forEach(([P, i, pc, gc, cs]) => {
+        const vx = P.x - M.x, vy = P.y - M.y, rr = Math.hypot(vx, vy) * (1 - q), an2 = Math.atan2(vy, vx) + q * 6.2832 * 1.5, x = M.x + rr * Math.cos(an2), y = M.y + rr * Math.sin(an2);
+        glow(ctx, x, y, ro * 3, gc);
+        const g = ctx.createRadialGradient(x, y, 0, x, y, ro);
+        g.addColorStop(0, cs[0]); g.addColorStop(0.6, cs[1]); g.addColorStop(1, cs[2]);
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, ro, 0, 6.2832); ctx.fill();
+        for (const t of HR_PT) { // inward swirl
+          const u = (now * 0.0009 * t.sp + t.ph) % 1, r = ro * (4 - 3 * u), ag = t.a0 + now * 0.006 * t.sp + 3 * u;
+          ctx.fillStyle = `rgba(${pc},${u * al})`; ctx.fillRect(x + r * Math.cos(ag) - 1, y + r * Math.sin(ag) - 1, 2, 2);
+        }
+      });
+      ctx.globalAlpha = 1;
+    }
+    const fl = Math.sin(Math.PI * seg(p, 0.73, 0.8)); // fusion flash
+    if (fl > 0) glow(ctx, M.x, M.y, 0.25 * H, `rgba(255,200,210,${0.9 * fl})`);
+    ctx.restore();
+    if (p >= 0.75) {
+      const dt = m.rt ? Math.min(0.1, Math.max(0, (now - m.rt) / 1000)) : 0; m.rt = now; m.rp = (m.rp || 0) + dt; // spin 1 rad/s
+      const e1 = ease(seg(p, 0.75, 0.85)), e2 = ease(seg(p, 0.85, 1)), core = 0.012 * H + 0.05 * H * e1 + 1.2 * diag * e2 ** 2;
+      const k = { ph: m.rp, ang: 0.3, vort: 0.6 * e1 + 0.4 * e2, rad: core * 6 + 0.15 * H, s: 1, blur: 0.02, dark: 0.5 * e2, core, bands: 0, rimc: [1.6, 0.12, 0.3] };
+      if (!kmWarp(ctx, W, H, M, k)) { // no WebGL: black disk + crimson ring
+        ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(M.x, M.y, core, 0, 6.2832); ctx.fill();
+        ctx.save(); ctx.globalCompositeOperation = 'lighter'; ring(M.x, M.y, core * 1.3, Math.max(2, core * 0.25), 'rgba(230,20,60,0.9)'); ctx.restore();
+      }
+      if (p < 0.95) { // sparks orbiting just outside the rim
+        ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = 'rgba(255,60,90,0.8)';
+        for (let i = 0; i < 12; i++) { const ag = i * 0.5236 + now * 0.003 * (1 + (i % 3) * 0.25), r = core * 1.45 + 4 + 6 * (i % 4); ctx.fillRect(M.x + r * Math.cos(ag) - 1, M.y + r * Math.sin(ag) - 1, 2, 2); }
+        ctx.restore();
+      }
+    }
+  }
+  function soundRed(b) {
+    const { ac, T, out, go, node, gain, osc, noise, holdS } = b, at = (p) => p * holdS;
+    for (const f of [220, 330]) { // converging tones: flat gain (osc() decays too early), 4 Hz vibrato
+      const o = ac.createOscillator(), tg = gain(0, out), vib = ac.createOscillator();
+      o.type = 'sine'; o.frequency.setValueAtTime(f, T); o.frequency.setValueAtTime(f, T + at(0.4)); o.frequency.exponentialRampToValueAtTime(277, T + at(0.74)); o.connect(tg);
+      tg.gain.setValueAtTime(0, T); tg.gain.linearRampToValueAtTime(0.09, T + at(0.2)); tg.gain.setValueAtTime(0.09, T + at(0.74)); tg.gain.exponentialRampToValueAtTime(0.0001, T + at(0.76));
+      vib.frequency.value = 4; vib.connect(gain(3, o.frequency));
+      go(o, 0, at(0.76) + 0.05); go(vib, 0, at(0.76) + 0.05);
+    }
+    osc('sine', 70, 30, at(0.75), 0.8, 0.7); noise(at(0.75), 0.5, node('lowpass', 200), 0.4); // fusion thump
+    const d = ac.createOscillator(), lp = node('lowpass', 150), dg = gain(0, out); // drone
+    d.type = 'sawtooth'; d.frequency.value = 45; d.connect(lp).connect(dg);
+    dg.gain.setValueAtTime(0, T + at(0.75)); dg.gain.linearRampToValueAtTime(0.2, T + at(1)); dg.gain.linearRampToValueAtTime(0.0001, T + at(1) + 0.45);
+    go(d, 0, at(1) + 0.5);
+  }
+
   // Effect registry. draw(ctx, frame, progress, anchor, state):
   //   frame = { w, h, video, tmp, now }; progress 0→1 over the hold (runs backwards while CANCELLING, 1 while LEAVING);
   //   anchor = smoothed primary anchor {x,y} in normalized output coords (detector frames are a downscale of the same,
@@ -994,6 +1066,7 @@ void main() {
     SHADOW_CLONE: { id: 'SHADOW_CLONE', label: 'Shadow clone', needsMask: true, needsBackgroundPlate: true, defaultAnchor: { x: 0.5, y: 0.5 }, draw: fxClone, sound: soundClone },
     BANKAI: { id: 'BANKAI', label: 'Bankai (sword)', needsMask: true, needsBackgroundPlate: false, defaultAnchor: { x: 0.5, y: 0.6 }, draw: fxBankai, sound: soundBankai },
     KAMUI: { id: 'KAMUI', label: 'Kamui (vortex)', needsMask: false, needsBackgroundPlate: false, defaultAnchor: { x: 0.45, y: 0.35 }, draw: fxKamui, sound: soundKamui },
+    HOLLOW_RED: { id: 'HOLLOW_RED', label: 'Red (fused orbs)', needsMask: false, needsBackgroundPlate: false, defaultAnchor: { x: 0.5, y: 0.5 }, draw: fxRed, sound: soundRed },
   };
 
   function renderFx(ctx, w, h, video, tmp, now) {

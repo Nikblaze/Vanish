@@ -107,6 +107,8 @@ const TH = {
   BK_THUMB_UP: 0.5, // BANKAI: reject thumbs-up — thumb tip above index MCP by > BK_THUMB_UP * knuckle width
   KM_TIP_R: 0.35,     // KAMUI: centroid of index/middle/ring tips within KM_TIP_R * face width of one eye centre
   KM_TIP_R_LOOSE: 0.6, // KAMUI hysteresis (and only 2 of the 3 fingers need to stay extended)
+  HR_TIPS: 0.6,       // HOLLOW_RED: index tips closer than HR_TIPS * mean hand size (hs). Static pose, no approach check.
+  HR_TIPS_LOOSE: 1.0, // HOLLOW_RED hysteresis: both index fingers up (≤ 2 extended each), tips within this * mean hs
   SC_CROSS: 0.7,    // SHADOW_CLONE: finger-segment midpoints closer than SC_CROSS * mean finger length (crossing near their middles)
 };
 
@@ -156,6 +158,14 @@ function scMetrics(h1, h2) {
     c: { x: (s1.m.x + s2.m.x) / 2, y: (s1.m.y + s2.m.y) / 2 } };
 }
 
+// HOLLOW_RED: both hands pointing with only the index finger, tips held together. lm space (aspect-corrected).
+const idxOnly = (h) => h.ext.i && !h.ext.m && !h.ext.r && !h.ext.p;
+function hrMetrics(h1, h2, F) {
+  const hs = (h1.hs + h2.hs) / 2, td = d(h1.lm[8], h2.lm[8]) / hs, [l, r] = [h1.raw[8], h2.raw[8]].sort((a, b) => a.x - b.x);
+  const mid = { x: (l.x + r.x) / 2, y: (l.y + r.y) / 2 };
+  return { hs, td, mid, hit: { anchor: mid, anchors: { red: { x: l.x, y: l.y }, blue: { x: r.x, y: r.y } } } };
+}
+
 // BANKAI: one closed fist raised beside the head (palm at/above eye level), normal distance, works seated.
 const nExt = (h) => +h.ext.i + +h.ext.m + +h.ext.r + +h.ext.p;
 const fist = (h) => nExt(h) <= TH.BK_MAX_EXT;
@@ -196,6 +206,11 @@ const RULES = [
       if (m.ok2) F.zones.push({ x: m.c.x / F.ar, y: m.c.y, r: m.len, label: 'SC cos ' + m.cos.toFixed(2) + ' ax ' + +m.axis + ' x ' + m.cross.toFixed(2) + ' tog ' + +m.tog });
       return m.ok2 && m.tog && m.cos < TH.SC_PERP_COS && m.axis && m.cross < TH.SC_CROSS ? { anchor: { x: m.c.x / F.ar, y: m.c.y } } : null; },
     loose(h1, h2, F) { if (!pairish(h1) || !pairish(h2)) return null; const c = scMetrics(h1, h2).c; return { anchor: { x: c.x / F.ar, y: c.y } }; } },
+  { id: 'HOLLOW_RED', hands: 2,
+    match(h1, h2, F) { const m = hrMetrics(h1, h2, F);
+      if (h1.ext.i && h2.ext.i) F.zones.push({ x: m.mid.x, y: m.mid.y, r: TH.HR_TIPS * m.hs / 2, label: 'HR tips ' + m.td.toFixed(2) + ' (<' + TH.HR_TIPS + ') idx ' + +idxOnly(h1) + +idxOnly(h2) });
+      return idxOnly(h1) && idxOnly(h2) && m.td < TH.HR_TIPS ? m.hit : null; },
+    loose(h1, h2, F) { if (!h1.ext.i || !h2.ext.i || nExt(h1) > 2 || nExt(h2) > 2) return null; const m = hrMetrics(h1, h2, F); return m.td < TH.HR_TIPS_LOOSE ? m.hit : null; } },
   { id: 'BANKAI', hands: 1,
     match(h, F) { if (nExt(h) > 2) return null; const m = bkMetrics(h, F), pc = m.hit.anchor;
       F.zones.push({ x: pc.x, y: pc.y, r: h.hs, label: 'BK ext ' + nExt(h) + ' th ' + +m.thumbUp + (m.dy == null ? ' noface' : ' dy ' + m.dy.toFixed(2) + ' side ' + m.side.toFixed(2)) });
