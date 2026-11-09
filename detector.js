@@ -98,9 +98,11 @@ const TH = {
   SC_AXIS: 0.75,    // SHADOW_CLONE: one pair within ~41° of vertical (|vy|/len > SC_AXIS), the other within ~41° of horizontal
   SC_NEAR: 3,       // SHADOW_CLONE/GOJO: another hand with its wrist within SC_NEAR * hs = seal attempt, so GOJO is blocked
   BK_MAX_EXT: 1,    // BANKAI: a "fist" has at most this many of index..pinky extended (one misread finger tolerated)
-  BK_CLOSE: 0.2,    // BANKAI: fist pushed toward the lens — knuckle width d(lm5, lm17) > BK_CLOSE of frame height
-                    //         (normal sitting distance is ~0.12–0.15; knuckle width stays visible when the fist faces the camera)
-  BK_CLOSE_LOOSE: 0.15, // BANKAI hysteresis
+  BK_EYE: 0.1,      // BANKAI: fist palm centre at most BK_EYE * face width below the eye line (fist raised to head height)
+  BK_SIDE: 0.5,     // BANKAI: palm centre beside the head, |dx| from nose > BK_SIDE * face width (not in front of the face:
+                    //         rules out adjusting glasses, chin on fist, drinking)
+  BK_EYE_LOOSE: 0.4,// BANKAI hysteresis: palm may drop to this * face width below the eye line
+  BK_NOFACE_Y: 0.35,// BANKAI without a detected face: palm centre in the top BK_NOFACE_Y of the frame
   BK_THUMB_UP: 0.5, // BANKAI: reject thumbs-up — thumb tip above index MCP by > BK_THUMB_UP * knuckle width
   SC_CROSS: 0.7,    // SHADOW_CLONE: finger-segment midpoints closer than SC_CROSS * mean finger length (crossing near their middles)
 };
@@ -151,13 +153,19 @@ function scMetrics(h1, h2) {
     c: { x: (s1.m.x + s2.m.x) / 2, y: (s1.m.y + s2.m.y) / 2 } };
 }
 
-// BANKAI: one fist pushed toward the camera (big in frame). Simple, works seated, nothing in a normal meeting looks like it.
+// BANKAI: one closed fist raised beside the head (palm at/above eye level), normal distance, works seated.
 const nExt = (h) => +h.ext.i + +h.ext.m + +h.ext.r + +h.ext.p;
 const fist = (h) => nExt(h) <= TH.BK_MAX_EXT;
-function bkMetrics(h) {
-  const kw = d(h.lm[5], h.lm[17]); // height units
-  return { kw, thumbUp: h.lm[4].y < h.lm[5].y - TH.BK_THUMB_UP * kw,
-    hit: { anchor: palmMid(h), anchors: { top: { x: (h.raw[5].x + h.raw[17].x) / 2, y: (h.raw[5].y + h.raw[17].y) / 2 } } } };
+function bkMetrics(h, F) {
+  const pc = palmMid(h), f = F.face(), kw = d(h.lm[5], h.lm[17]);
+  let dy = null, side = null; // dy, side in face widths (dy > 0 = below the eye line)
+  if (f) {
+    const fw = d({ x: f[234].x * F.ar, y: f[234].y }, { x: f[454].x * F.ar, y: f[454].y }) || 1e-6;
+    dy = (pc.y - (f[33].y + f[263].y) / 2) / fw; side = Math.abs(pc.x - f[1].x) * F.ar / fw;
+  }
+  const topY = Math.min(...h.raw.map((l) => l.y)); // column erupts from the top of the fist
+  return { dy, side, thumbUp: h.lm[4].y < h.lm[5].y - TH.BK_THUMB_UP * kw,
+    hit: { anchor: pc, anchors: { top: { x: pc.x, y: topY } } } };
 }
 
 // Ordered rule list. Two-hand rules are always evaluated before one-hand rules (sorted below) so a two-hand
@@ -170,10 +178,12 @@ const RULES = [
       return m.ok2 && m.tog && m.cos < TH.SC_PERP_COS && m.axis && m.cross < TH.SC_CROSS ? { anchor: { x: m.c.x / F.ar, y: m.c.y } } : null; },
     loose(h1, h2, F) { if (!pairish(h1) || !pairish(h2)) return null; const c = scMetrics(h1, h2).c; return { anchor: { x: c.x / F.ar, y: c.y } }; } },
   { id: 'BANKAI', hands: 1,
-    match(h, F) { if (nExt(h) > 2) return null; const m = bkMetrics(h);
-      F.zones.push({ x: m.hit.anchor.x, y: m.hit.anchor.y, r: m.kw, label: 'BK kw ' + m.kw.toFixed(2) + ' ext ' + nExt(h) + ' th ' + +m.thumbUp });
-      return fist(h) && !m.thumbUp && m.kw > TH.BK_CLOSE ? m.hit : null; },
-    loose(h) { const m = bkMetrics(h); return nExt(h) <= 2 && m.kw > TH.BK_CLOSE_LOOSE ? m.hit : null; } },
+    match(h, F) { if (nExt(h) > 2) return null; const m = bkMetrics(h, F), pc = m.hit.anchor;
+      F.zones.push({ x: pc.x, y: pc.y, r: h.hs, label: 'BK ext ' + nExt(h) + ' th ' + +m.thumbUp + (m.dy == null ? ' noface' : ' dy ' + m.dy.toFixed(2) + ' side ' + m.side.toFixed(2)) });
+      const raised = m.dy == null ? pc.y < TH.BK_NOFACE_Y : m.dy < TH.BK_EYE && m.side > TH.BK_SIDE;
+      return fist(h) && !m.thumbUp && raised ? m.hit : null; },
+    loose(h, F) { if (nExt(h) > 2) return null; const m = bkMetrics(h, F);
+      return (m.dy == null ? m.hit.anchor.y < TH.BK_NOFACE_Y + 0.15 : m.dy < TH.BK_EYE_LOOSE) ? m.hit : null; } },
   { id: 'INSTANT_TRANSMISSION', hands: 1,
     match(h, F) { if (!h.twoUp) return null; const fz = F.forehead(); if (!fz) return null; const R = fz.r * TH.IT_TIP_R; return d(h.lm[8], fz.c) < R && d(h.lm[12], fz.c) < R ? { anchor: tipMid(h) } : null; },
     loose: (h) => h.twoUp ? { anchor: tipMid(h) } : null },

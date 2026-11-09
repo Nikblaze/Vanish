@@ -10,7 +10,7 @@ Works on **Microsoft Teams web** (`teams.microsoft.com`, `teams.live.com`, `team
 | Index + middle crossed (or pressed together), hand raised | **Domain Expansion**: black void expands from your hand, starfield, everything goes dark |
 | **Room**: one hand palm-down, all five fingers spread and curved down like an upside-down bowl, hand above the bottom quarter of the frame | **Room**: particle ring, cyan dome expands past the frame, frame is sliced into tiles, you get scattered, tiles drift apart into black. Needs captured background |
 | **Shadow Clone**: both hands, index + middle pressed together on each, one pair vertical and the other horizontal forming a "+", crossing near their middles | **Shadow clone**: smoke puffs leave copies of you, the copies multiply, then everyone (you included) bursts into smoke and the room is empty. Needs captured background |
-| **Bankai**: one closed fist pushed toward the camera (close enough to look about twice its normal size), thumb not up | **Bankai**: dark red aura rises around you, the room darkens, debris lifts, a black-red light column erupts from your fist, then a slash splits the frame apart into black |
+| **Bankai**: one closed fist raised beside your head, palm at about eye level, normal distance from the camera | **Bankai**: dark red aura rises around you, the room darkens, debris lifts, a black-red light column erupts upward from your fist, then a slash splits the frame apart into black |
 
 All visuals and sounds are generated in code. No third-party character art, clips, or audio are included.
 
@@ -81,8 +81,10 @@ Gesture thresholds (`TH`, ratios of hand/face size, so scale-invariant):
 | `SC_NEAR` | `3` | Shadow Clone / Gojo: a second hand with its wrist within `SC_NEAR × hand size` counts as a seal attempt and blocks Gojo. In the seal, the partly hidden hand only needs its index up (ring + pinky curled); the other needs the full two-finger pose |
 | `SC_CROSS` | `0.7` | Shadow Clone: finger-segment midpoints closer than `SC_CROSS × mean finger length` |
 | `BK_MAX_EXT` | `1` | Bankai: a "fist" has at most this many of index..pinky extended |
-| `BK_CLOSE` | `0.2` | Bankai: knuckle width `d(lm5, lm17)` above this fraction of frame height (fist pushed toward the lens; normal sitting ≈ 0.12–0.15) |
-| `BK_CLOSE_LOOSE` | `0.15` | Bankai hysteresis |
+| `BK_EYE` | `0.1` | Bankai: fist palm centre at most this × face width below the eye line |
+| `BK_SIDE` | `0.5` | Bankai: palm centre beside the head, more than this × face width from the nose (not in front of the face) |
+| `BK_EYE_LOOSE` | `0.4` | Bankai hysteresis |
+| `BK_NOFACE_Y` | `0.35` | Bankai with no face detected: palm centre in the top 35% of the frame |
 | `BK_THUMB_UP` | `0.5` | Bankai: rejects thumbs-up (thumb tip above index MCP by more than this × knuckle width) |
 
 ---
@@ -129,7 +131,7 @@ Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected). Rules l
 - **Gojo**: same finger pose, tips crossed (left/right order swapped vs. knuckles) or pressed together. Ignored when another hand's wrist is within `SC_NEAR × hand size`, so a cross seal (even with one hand partly hidden) never reads as Gojo
 - **Shadow Clone**: two hands, each index+middle up and pressed together; each pair is one segment (knuckle mid to tip mid), the two are near-perpendicular (`|cos|`), one near-vertical and one near-horizontal, and cross near their middles
 - **Room**: palm normal `(lm5−lm0)×(lm17−lm0)` mostly vertical (`|ny|`, orientation-agnostic), ≥3 fingertips below their knuckles (palm-down bowl, not palm-up cup), fingers fanned (`tip8↔tip20` vs `mcp5↔mcp17`), thumb spread, wrist not in the bottom `LOW_ZONE`
-- **Bankai**: one closed fist (≤ `BK_MAX_EXT` of index..pinky extended), thumb not up, pushed toward the camera so its knuckle width exceeds `BK_CLOSE` of the frame height
+- **Bankai**: one closed fist (≤ `BK_MAX_EXT` of index..pinky extended), thumb not up, raised beside the head: palm centre at/above the eye line (`BK_EYE`) and to the side of the face (`BK_SIDE`). The face model runs only when a fist is visible
 
 ### 4. State machine
 ```
