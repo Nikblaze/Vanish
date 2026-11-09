@@ -105,11 +105,8 @@ const TH = {
   BK_EYE_LOOSE: 1.0,// BANKAI hysteresis: palm may drop to this * face width below the eye line
   BK_NOFACE_Y: 0.35,// BANKAI without a detected face: palm centre in the top BK_NOFACE_Y of the frame
   BK_THUMB_UP: 0.5, // BANKAI: reject thumbs-up — thumb tip above index MCP by > BK_THUMB_UP * knuckle width
-  KM_EXT_MIN: 3,      // KAMUI: open hand over the eye — at least this many of index..pinky extended (rejects pinching
-                      //        glasses, rubbing an eye with a knuckle, fists)
-  KM_EYE_R: 0.35,     // KAMUI: palm centre within KM_EYE_R * face width of one eye centre
-  KM_CLEAR: 0.18,     // KAMUI: the other eye is unobstructed — no hand landmark within KM_CLEAR * face width of it
-  KM_EYE_R_LOOSE: 0.55, // KAMUI hysteresis (palm may drift; the clear-eye check is skipped)
+  KM_TIP_R: 0.35,     // KAMUI: centroid of index/middle/ring tips within KM_TIP_R * face width of one eye centre
+  KM_TIP_R_LOOSE: 0.6, // KAMUI hysteresis (and only 2 of the 3 fingers need to stay extended)
   SC_CROSS: 0.7,    // SHADOW_CLONE: finger-segment midpoints closer than SC_CROSS * mean finger length (crossing near their middles)
 };
 
@@ -175,18 +172,19 @@ function bkMetrics(h, F) {
     hit: { anchor: pc, anchors: { blade: { x: r[5].x, y: by }, dir: { x: Math.sign(r[5].x - r[17].x) || 1, y: 0 } } } };
 }
 
-// KAMUI: one open hand over one eye, the other eye visible. Distances in aspect-corrected lm space, in face widths.
-const pcLm = (h) => { const p = [0, 5, 9, 13, 17].map((i) => h.lm[i]); return { x: p.reduce((a, l) => a + l.x, 0) / 5, y: p.reduce((a, l) => a + l.y, 0) / 5 }; };
+// KAMUI: index, middle and ring fingers extended and laid over one eye. Distances in aspect-corrected lm space, in
+// face widths. The anchor is the other (visible) eye.
 function kmMetrics(h, F) {
-  if (nExt(h) < TH.KM_EXT_MIN - 1 || palmMid(h).y >= 0.7) return null;
+  const n3 = +h.ext.i + +h.ext.m + +h.ext.r;
+  if (n3 < 2) return null; // cheap pre-filter so the face model isn't run for every hand
+  const tc = [8, 12, 16].reduce((o, i) => ({ x: o.x + h.lm[i].x / 3, y: o.y + h.lm[i].y / 3 }), { x: 0, y: 0 });
+  if (tc.y >= 0.7) return null;
   const f = F.face();
   if (!f) return null;
   const P = (l) => ({ x: l.x * F.ar, y: l.y }), mid = (a, b) => ({ x: (f[a].x + f[b].x) / 2, y: (f[a].y + f[b].y) / 2 });
-  const fw = d(P(f[234]), P(f[454])) || 1e-6, pc = pcLm(h), eA = mid(33, 133), eB = mid(362, 263);
-  const dA = d(pc, P(eA)) / fw, dB = d(pc, P(eB)) / fw, aCov = dA <= dB, other = aCov ? eB : eA;
-  let clear = Infinity;
-  for (const x of F.hands) for (const l of x.lm) clear = Math.min(clear, d(l, P(other)) / fw);
-  return { nE: nExt(h), dCov: Math.min(dA, dB), clear, vis: other, cov: aCov ? eA : eB, fw };
+  const fw = d(P(f[234]), P(f[454])) || 1e-6, eA = mid(33, 133), eB = mid(362, 263);
+  const dA = d(tc, P(eA)) / fw, dB = d(tc, P(eB)) / fw, aCov = dA <= dB;
+  return { n3, dCov: Math.min(dA, dB), vis: aCov ? eB : eA, cov: aCov ? eA : eB, fw };
 }
 
 // Ordered rule list. Two-hand rules are always evaluated before one-hand rules (sorted below) so a two-hand
@@ -207,10 +205,9 @@ const RULES = [
       return (m.dy == null ? m.hit.anchor.y < TH.BK_NOFACE_Y + 0.15 : m.dy < TH.BK_EYE_LOOSE) ? m.hit : null; } },
   { id: 'KAMUI', hands: 1,
     match(h, F) { const m = kmMetrics(h, F); if (!m) return null;
-      F.zones.push({ x: m.cov.x, y: m.cov.y, r: TH.KM_EYE_R * m.fw, label: 'KM cov ' + m.dCov.toFixed(2) + ' clr ' + m.clear.toFixed(2) + ' ext ' + m.nE },
-        { x: m.vis.x, y: m.vis.y, r: TH.KM_CLEAR * m.fw, label: 'clear' });
-      return m.nE >= TH.KM_EXT_MIN && m.dCov < TH.KM_EYE_R && m.clear > TH.KM_CLEAR ? { anchor: m.vis, anchors: { cov: m.cov } } : null; },
-    loose(h, F) { const m = kmMetrics(h, F); return m && m.nE >= TH.KM_EXT_MIN - 1 && m.dCov < TH.KM_EYE_R_LOOSE ? { anchor: m.vis, anchors: { cov: m.cov } } : null; } },
+      F.zones.push({ x: m.cov.x, y: m.cov.y, r: TH.KM_TIP_R * m.fw, label: 'KM tips ' + m.dCov.toFixed(2) + ' fingers ' + m.n3 + '/3' });
+      return m.n3 === 3 && m.dCov < TH.KM_TIP_R ? { anchor: m.vis, anchors: { cov: m.cov } } : null; },
+    loose(h, F) { const m = kmMetrics(h, F); return m && m.dCov < TH.KM_TIP_R_LOOSE ? { anchor: m.vis, anchors: { cov: m.cov } } : null; } },
   { id: 'INSTANT_TRANSMISSION', hands: 1,
     match(h, F) { if (!h.twoUp) return null; const fz = F.forehead(); if (!fz) return null; const R = fz.r * TH.IT_TIP_R; return d(h.lm[8], fz.c) < R && d(h.lm[12], fz.c) < R ? { anchor: tipMid(h) } : null; },
     loose: (h) => h.twoUp ? { anchor: tipMid(h) } : null },
