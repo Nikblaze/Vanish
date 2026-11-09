@@ -19,7 +19,7 @@
   // ---------- shared state machine (one, global; every stream's draw loop renders from it) ----------
   const S = { st: 'IDLE', kind: null, t0: 0, lastHold: 0, t1: 0, leaveAt: 0, test: false,
     cand: null, candStart: 0, candLast: 0, tip: { x: 0.5, y: 0.4 }, cx: 0.5, capAt: 0, stepT: 0,
-    tc: 0, pc: 0, raw: null, rawAt: 0, sm: null, smId: null };
+    tc: 0, pc: 0, raw: null, rawAt: 0, sm: null, smId: null, mem: {} };
   let lastRecv = 0, haveMask = false, plateImg = null;
   const maskCv = document.createElement('canvas'), maskHard = document.createElement('canvas');
   try {
@@ -183,7 +183,7 @@
   // ---------- state transitions ----------
   function setSt(st) { S.st = st; updateDebug(); }
   function activate(kind, now, test) {
-    Object.assign(S, { kind, t0: now, lastHold: now, test, cand: null });
+    Object.assign(S, { kind, t0: now, lastHold: now, test, cand: null, mem: {} });
     S.tip = { ...((S.raw && now - S.rawAt < 600 && S.raw) || FX[kind].defaultAnchor) };
     setSt('ACTIVE');
     sound(kind);
@@ -341,7 +341,8 @@
   }
 
   // ---------- effects (procedural canvas 2D) ----------
-  const rnd = ((s) => () => { s |= 0; s = (s + 0x6D2B79F5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; })(42);
+  const mkRnd = (s) => () => { s |= 0; s = (s + 0x6D2B79F5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const rnd = mkRnd(42);
   const STARS = Array.from({ length: 200 }, () => ({ a: rnd() * 6.283, s: 0.3 + rnd() * 0.7, p: rnd() }));
   const glow = (ctx, x, y, r, c0, c1 = 'rgba(0,0,0,0)') => {
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
@@ -454,11 +455,176 @@
     }
   }
 
+  // ROOM timeline (p = progress 0→1 over the hold; reversed on cancel):
+  //  charge 0–0.40   rotating ring of air/dust particles under the palm
+  //  build  0.40–0.85 translucent cyan dome forms under the palm (0.40–0.55), then expands past the frame (0.55–0.85):
+  //                  cool tint inside, bright rim, faint lattice, ring-shaped distortion at the rim
+  //  climax 0.85–1.0 frame cut into a tile grid; tiles split (q 0–.35), user tiles swap with other tiles and the vacated
+  //                  homes show the background plate (q .35–.6), scattered user tiles flip to plate (q .6–.75), all tiles
+  //                  drift apart into black (q .75–1)
+  //  end    p = 1    black frame while Leave is clicked
+  const seg = (p, a, b) => Math.min(1, Math.max(0, (p - a) / (b - a)));
+  const ROOM_COLS = 6, ROOM_ROWS = 4;
+  const ROOM_PTS = Array.from({ length: 60 }, () => ({ a0: rnd() * 6.283, j: 0.8 + rnd() * 0.4, sz: 1 + rnd() * 2, sp: 0.6 + rnd() * 0.8 }));
+  let roomLat = null;
+  function roomLattice() { // unit sphere wireframe, rendered once
+    if (roomLat) return roomLat;
+    try { roomLat = new OffscreenCanvas(512, 512); } catch { roomLat = document.createElement('canvas'); roomLat.width = roomLat.height = 512; }
+    const c = roomLat.getContext('2d');
+    c.strokeStyle = 'rgba(170,240,255,0.5)'; c.lineWidth = 2;
+    c.beginPath(); c.arc(256, 256, 250, 0, 7); c.stroke();
+    for (let k = 0; k <= 6; k++) { c.beginPath(); c.ellipse(256, 256, 250 * Math.cos(k * Math.PI / 14), 250, 0, 0, 7); c.stroke(); }
+    for (let j = 1; j <= 6; j++) for (const sg of [-1, 1]) {
+      const dy = 250 * Math.sin(j * Math.PI / 14) * sg, hw = Math.sqrt(250 * 250 - dy * dy);
+      c.beginPath(); c.moveTo(256 - hw, 256 + dy); c.lineTo(256 + hw, 256 + dy); c.stroke();
+    }
+    return roomLat;
+  }
+  function roomBuild(f, W, H, m) { // one-off per climax: plate, frozen frame, per-tile user flags, swap pairs
+    const mk = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; };
+    const plate = mk(), pc = plate.getContext('2d');
+    if (plateImg?.complete && plateImg.naturalWidth) { pc.filter = `brightness(${lum(f.video) / Math.max(1, lum(plateImg))})`; pc.drawImage(plateImg, 0, 0, W, H); }
+    else { pc.filter = 'blur(30px)'; pc.drawImage(f.video, 0, 0, W, H); }
+    pc.filter = 'none';
+    const src = mk(); src.getContext('2d').drawImage(f.video, 0, 0, W, H);
+    for (const c of [pc, src.getContext('2d')]) { // keep the dome's cool tint so the dome→tiles cut doesn't pop
+      c.fillStyle = 'rgba(70,190,255,0.13)'; c.fillRect(0, 0, W, H);
+      c.globalCompositeOperation = 'multiply'; c.fillStyle = 'rgba(0,40,80,0.12)'; c.fillRect(0, 0, W, H); c.globalCompositeOperation = 'source-over';
+    }
+    const n = ROOM_COLS * ROOM_ROWS, user = [];
+    let md = null;
+    if (haveMask) { const mw = maskHard.width, mh = maskHard.height, t = document.createElement('canvas'); t.width = mw; t.height = mh; const tc = t.getContext('2d'); tc.drawImage(maskHard, 0, 0); md = tc.getImageData(0, 0, mw, mh).data; }
+    for (let i = 0; i < n; i++) {
+      const c = i % ROOM_COLS, r = Math.floor(i / ROOM_COLS);
+      if (md) {
+        const mw = maskHard.width, mh = maskHard.height, x0 = Math.floor(c * mw / ROOM_COLS), x1 = Math.max(x0 + 1, Math.floor((c + 1) * mw / ROOM_COLS)), y0 = Math.floor(r * mh / ROOM_ROWS), y1 = Math.max(y0 + 1, Math.floor((r + 1) * mh / ROOM_ROWS));
+        let sum = 0, cnt = 0;
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { sum += md[(y * mw + x) * 4 + 3]; cnt++; }
+        user[i] = sum / cnt / 255 > 0.25;
+      } else user[i] = r >= 1 && Math.abs((c + 0.5) / ROOM_COLS - S.cx) < 0.18;
+    }
+    const r7 = mkRnd(7), idx = [...Array(n).keys()];
+    const shuf = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(r7() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+    const pair = Array(n).fill(-1), non = shuf(idx.filter((i) => !user[i]));
+    for (const i of idx.filter((i) => user[i])) {
+      if (pair[i] >= 0) continue;
+      let j = non.pop();
+      if (j === undefined) j = idx.find((k) => k !== i && pair[k] < 0);
+      if (j === undefined) continue;
+      pair[i] = j; pair[j] = i;
+    }
+    const rest = shuf(idx.filter((i) => pair[i] < 0));
+    while (rest.length > 1) { const a = rest.pop(), b = rest.pop(); pair[a] = b; pair[b] = a; }
+    const rot = idx.map(() => (r7() - 0.5)), dir = idx.map((i) => {
+      let dx = ((i % ROOM_COLS) + 0.5) / ROOM_COLS - 0.5, dy = (Math.floor(i / ROOM_COLS) + 0.5) / ROOM_ROWS - 0.5;
+      if (!dx && !dy) { const an = r7() * 6.283; dx = Math.cos(an); dy = Math.sin(an); }
+      const l = Math.hypot(dx, dy); return { x: dx / l, y: dy / l };
+    });
+    Object.assign(m, { W, H, plate, src, user, pair, rot, dir, tiles: true });
+  }
+  function fxRoom(ctx, f, p, a, s) {
+    const W = f.w, H = f.h, now = f.now;
+    if (p <= 0) return;
+    if (p >= 1) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); return; }
+    if (p >= 0.85) return roomClimax(ctx, f, seg(p, 0.85, 1), s.mem);
+    const P = { x: a.x * W, y: a.y * H }, wr = s.anchors.wrist, md = s.anchors.mid;
+    const hs = Math.min(H * 0.3, Math.max(H * 0.06, wr && md ? Math.hypot((md.x - wr.x) * W, (md.y - wr.y) * H) : H * 0.12));
+    const C = { x: P.x, y: P.y + 0.9 * hs };
+    const Rmax = Math.hypot(Math.max(C.x, W - C.x), Math.max(C.y, H - C.y)) * 1.05;
+    if (p < 0.6) { // charge: orbiting particles
+      const al = seg(p, 0, 0.1) * (1 - seg(p, 0.5, 0.6)), rx = hs * 1.1 * (0.7 + 0.3 * seg(p, 0, 0.4)), ry = rx * 0.3;
+      if (al > 0) {
+        ctx.save();
+        ctx.strokeStyle = `rgba(160,230,255,${0.35 * al})`; ctx.lineWidth = 1.5;
+        for (let k = 0; k < 3; k++) { const st = now * 0.004 + k * 2.094; ctx.beginPath(); ctx.ellipse(C.x, C.y, rx, ry, 0, st, st + 1.2); ctx.stroke(); }
+        ctx.globalCompositeOperation = 'lighter';
+        for (const q of ROOM_PTS) {
+          const an = q.a0 + now * 0.004 * q.sp, sn = Math.sin(an);
+          ctx.fillStyle = `rgba(210,245,255,${al * (sn > 0 ? 1 : 0.4)})`;
+          ctx.fillRect(C.x + Math.cos(an) * rx * q.j - q.sz / 2, C.y + sn * ry * q.j - q.sz / 2, q.sz, q.sz);
+        }
+        ctx.restore();
+      }
+    }
+    if (p < 0.4) return;
+    const form = seg(p, 0.4, 0.55), grow = ease(seg(p, 0.55, 0.85)), A = form;
+    const R = hs * 1.2 * (0.3 + 0.7 * form) + (Rmax - hs * 1.2) * grow;
+    ctx.save();
+    if (grow > 0 && R < Rmax) { // ring-shaped lens distortion at the rim
+      const band = Math.max(12, R * 0.06);
+      ctx.save();
+      ctx.beginPath(); ctx.arc(C.x, C.y, R + band, 0, 7); ctx.moveTo(C.x + Math.max(0, R - band), C.y); ctx.arc(C.x, C.y, Math.max(0, R - band), 0, 7);
+      ctx.clip('evenodd');
+      ctx.translate(C.x, C.y); ctx.scale(1.035, 1.035); ctx.translate(-C.x, -C.y);
+      ctx.drawImage(ctx.canvas, 0, 0);
+      ctx.restore();
+    }
+    ctx.save(); // inside: cool tint + lattice
+    ctx.beginPath(); ctx.arc(C.x, C.y, R, 0, 7); ctx.clip();
+    ctx.fillStyle = `rgba(70,190,255,${0.13 * A})`; ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = `rgba(0,40,80,${0.12 * A})`; ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 0.35 * A;
+    ctx.translate(C.x, C.y); ctx.rotate(now * 0.0002);
+    ctx.drawImage(roomLattice(), -R, -R, 2 * R, 2 * R);
+    ctx.restore();
+    if (R < Rmax) { // rim, no shadowBlur
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = `rgba(80,210,255,${0.25 * A})`; ctx.lineWidth = 10; ctx.beginPath(); ctx.arc(C.x, C.y, R, 0, 7); ctx.stroke();
+      ctx.strokeStyle = `rgba(220,250,255,${0.9 * A})`; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(C.x, C.y, R, 0, 7); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function roomClimax(ctx, f, q, m) {
+    const W = f.w, H = f.h, now = f.now;
+    if (!m.tiles || m.W !== W || m.H !== H) roomBuild(f, W, H, m);
+    const { plate, src, user, pair, rot, dir } = m, tw = W / ROOM_COLS, th = H / ROOM_ROWS;
+    const sp = ease(seg(q, 0, 0.35)), sw = ease(seg(q, 0.35, 0.6)), fl = seg(q, 0.6, 0.75), dr = seg(q, 0.75, 1);
+    const hc = (i) => ({ x: ((i % ROOM_COLS) + 0.5) * tw, y: (Math.floor(i / ROOM_COLS) + 0.5) * th });
+    const tile = (img, si, pos, rt, sx, dst, i) => { // draw source tile si centred at pos with split/drift transform
+      const jx = Math.sin(now * 0.05 + i * 7) * 2 * sp, jy = Math.cos(now * 0.043 + i * 3) * 2 * sp, k = dr * dr * 0.8 * Math.max(W, H), sc = 1 - 0.4 * dr, ins = 3 * sp;
+      ctx.save(); ctx.globalAlpha = 1 - dr;
+      ctx.translate(pos.x + jx + dir[dst].x * k, pos.y + jy + dir[dst].y * k); ctx.rotate(rt + rot[i] * 0.15 * sp + rot[i] * dr * 2); ctx.scale(sx * sc, sc);
+      ctx.drawImage(img, (si % ROOM_COLS) * tw, Math.floor(si / ROOM_COLS) * th, tw, th, -tw / 2 + ins, -th / 2 + ins, tw - 2 * ins, th - 2 * ins);
+      ctx.restore();
+    };
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const n = ROOM_COLS * ROOM_ROWS;
+    if (q >= 0.35 && q < 1) for (let k = 0; k < n; k++) if (user[k]) tile(plate, k, hc(k), 0, 1, k, k); // vacated homes show the background
+    for (let i = 0; i < n; i++) {
+      const j = pair[i], a = hc(i), b = j >= 0 ? hc(j) : a, dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1, arc = Math.sin(Math.PI * sw) * 0.15 * H;
+      const pos = { x: a.x + dx * sw - dy / l * arc, y: a.y + dy * sw + dx / l * arc };
+      const dst = sw >= 1 && j >= 0 ? j : i;
+      if (user[i] && fl > 0.5) tile(plate, j >= 0 ? j : i, pos, rot[i] * Math.sin(Math.PI * sw), Math.abs(Math.cos(Math.PI * fl)), dst, i);
+      else tile(src, i, pos, rot[i] * Math.sin(Math.PI * sw), user[i] ? Math.abs(Math.cos(Math.PI * fl)) : 1, dst, i);
+    }
+    const la = 0.8 * Math.sin(Math.PI * seg(q, 0, 0.35));
+    if (la > 0.01) {
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.strokeStyle = `rgba(220,250,255,${la})`; ctx.lineWidth = 2; ctx.beginPath();
+      for (let c = 1; c < ROOM_COLS; c++) { ctx.moveTo(c * tw, 0); ctx.lineTo(c * tw, H); }
+      for (let r = 1; r < ROOM_ROWS; r++) { ctx.moveTo(0, r * th); ctx.lineTo(W, r * th); }
+      ctx.stroke(); ctx.restore();
+    }
+  }
+  function soundRoom(b) {
+    const { ac, T, out, go, node, gain, osc, noise, holdS } = b, at = (p) => p * holdS;
+    const nb = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate), nd = nb.getChannelData(0);
+    for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+    const wind = ac.createBufferSource(), bp = node('bandpass', 500), env = gain(0, out), lfo = ac.createOscillator();
+    wind.buffer = nb; wind.loop = true; bp.Q.value = 1.2; wind.connect(bp).connect(env);
+    env.gain.setValueAtTime(0, T); env.gain.linearRampToValueAtTime(0.28, T + at(0.3)); env.gain.setValueAtTime(0.28, T + at(0.6)); env.gain.linearRampToValueAtTime(0.0001, T + at(0.9));
+    lfo.frequency.value = 0.7; lfo.connect(gain(250, bp.frequency));
+    go(wind, 0, at(0.92)); go(lfo, 0, at(0.92));
+    osc('sine', 75, 42, at(0.55), 1.4, 0.5); osc('triangle', 150, 90, at(0.55), 1.0, 0.12);
+    noise(at(0.55), 1.2, node('lowpass', 300), 0.35);
+    for (let i = 0; i < 10; i++) { const t = at(0.85 + i * 0.012); noise(t, 0.035, node('bandpass', 4500 + i * 300), 0.45); osc('square', 3200, 1600, t, 0.04, 0.06); }
+    osc('sine', 90, 40, at(0.98), 0.5, 0.35);
+  }
+
   // Effect registry. draw(ctx, frame, progress, anchor, state):
   //   frame = { w, h, video, tmp, now }; progress 0→1 over the hold (runs backwards while CANCELLING, 1 while LEAVING);
   //   anchor = smoothed primary anchor {x,y} in normalized output coords (detector frames are a downscale of the same,
   //   un-mirrored camera image we draw, so x*w, y*h maps directly; the app mirrors only its local self-view);
-  //   state = { phase, t, te, tc, test, anchors, rawAnchor, startAnchor }.
+  //   state = { phase, t, te, tc, test, anchors, rawAnchor, startAnchor, mem } (mem = per-activation scratch, reset in activate()).
   // sound(bus, progress): scheduled once at activation (progress = 0); bus.holdS = seconds until leave.
   const FX = {
     INSTANT_TRANSMISSION: { id: 'INSTANT_TRANSMISSION', label: 'Instant Transmission', needsMask: true, needsBackgroundPlate: true,
@@ -487,6 +653,7 @@
           go(o, 0, life); go(l, 0, life);
         }
       } },
+    ROOM: { id: 'ROOM', label: 'Room (dome)', needsMask: true, needsBackgroundPlate: true, defaultAnchor: { x: 0.5, y: 0.45 }, draw: fxRoom, sound: soundRoom },
   };
 
   function renderFx(ctx, w, h, video, tmp, now) {
@@ -495,7 +662,7 @@
     if (tmp.width !== w || tmp.height !== h) { tmp.width = w; tmp.height = h; }
     const can = S.st === 'CANCELLING';
     const state = { phase: S.st, t: can ? null : now - S.t0, te: can ? now - S.t1 : null, tc: S.tc, test: S.test, anchors: S.sm?.anchors || {},
-      rawAnchor: S.raw && now - S.rawAt < 600 ? S.raw : null, startAnchor: S.tip };
+      rawAnchor: S.raw && now - S.rawAt < 600 ? S.raw : null, startAnchor: S.tip, mem: S.mem };
     fx.draw(ctx, { w, h, video, tmp, now }, progress(now), S.sm?.anchor || S.tip, state);
   }
 

@@ -82,6 +82,17 @@ const TH = {
   IT_TIP_R: 1.6,      // INSTANT_TRANSMISSION: both tips within FOREHEAD_R * IT_TIP_R of forehead centre
   GOJO_CROSS: 1.5,    // GOJO crossed: tip order swapped vs knuckles AND tips within palm * GOJO_CROSS
   GOJO_TOGETHER: 0.9, // GOJO together: dist(tip8, tip12) < palm * GOJO_TOGETHER (palm = dist(lm5, lm9))
+  LOW_ZONE: 0.25,        // shared: gestures need the wrist above the bottom LOW_ZONE of the frame (no desk/typing hands)
+  // ROOM palm normal = (lm5-lm0) x (lm17-lm0) in aspect-corrected 3D. We use |ny| (orientation-agnostic, no handedness
+  // needed): palm facing camera puts the normal on z, sideways on x, palm up/down on y. "Tips below MCPs" then
+  // separates palm-down (bowl) from palm-up (cup).
+  ROOM_EXT: 1.0,         // ROOM: looser finger-extended ratio (fingers are curved down into a bowl)
+  ROOM_NY: 0.55,         // ROOM: |palm normal . y| / |normal| — palm plane roughly horizontal (palm down)
+  ROOM_NY_LOOSE: 0.4,    // ROOM hysteresis
+  ROOM_TIP_DROP: 0.1,    // ROOM: fingertip must be below its MCP by > ROOM_TIP_DROP * hs (curved down)
+  ROOM_TIPS_DOWN: 3,     // ROOM: at least this many of index..pinky tips dropped
+  ROOM_SPREAD: 1.3,      // ROOM: dist(tip8, tip20) > ROOM_SPREAD * dist(mcp5, mcp17) — fingers fanned
+  ROOM_THUMB: 0.5,       // ROOM: thumb spread — dist(tip4, mcp5) > ROOM_THUMB * hs
 };
 
 // ar = frame width/height; x is scaled by ar so distances are isotropic (z too, same scale as x).
@@ -89,9 +100,23 @@ function prepHand(raw, ar, score) {
   const lm = raw.map((l) => ({ x: l.x * ar, y: l.y, z: l.z * ar }));
   const ext = (tip, pip, k = TH.EXT) => d(lm[tip], lm[0]) > d(lm[pip], lm[0]) * k;
   const e = { i: ext(8, 6), m: ext(12, 10, TH.EXT_MIDDLE), r: ext(16, 14), p: ext(20, 18) };
-  return { raw, lm, score, palm: d(lm[5], lm[9]), ext: e, twoUp: e.i && e.m && !e.r && !e.p };
+  return { raw, lm, score, palm: d(lm[5], lm[9]), hs: d(lm[0], lm[9]), extK: (tip, pip, k) => ext(tip, pip, k), ext: e, twoUp: e.i && e.m && !e.r && !e.p };
 }
 const tipMid = (h) => ({ x: (h.raw[8].x + h.raw[12].x) / 2, y: (h.raw[8].y + h.raw[12].y) / 2 });
+const palmMid = (h) => { const p = [0, 5, 9, 13, 17].map((i) => h.raw[i]); return { x: p.reduce((a, l) => a + l.x, 0) / 5, y: p.reduce((a, l) => a + l.y, 0) / 5 }; };
+function roomMetrics(h) {
+  if (h._room) return h._room;
+  const lm = h.lm, a = { x: lm[5].x - lm[0].x, y: lm[5].y - lm[0].y, z: lm[5].z - lm[0].z }, b = { x: lm[17].x - lm[0].x, y: lm[17].y - lm[0].y, z: lm[17].z - lm[0].z };
+  const n = { x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x };
+  return (h._room = {
+    ny: Math.abs(n.y) / (Math.hypot(n.x, n.y, n.z) || 1),
+    drops: [[8, 5], [12, 9], [16, 13], [20, 17]].filter(([t, m]) => lm[t].y > lm[m].y + TH.ROOM_TIP_DROP * h.hs).length,
+    spread: d(lm[8], lm[20]) / (d(lm[5], lm[17]) || 1),
+    thumb: d(lm[4], lm[5]) / (h.hs || 1),
+    nExt: [[8, 6], [12, 10], [16, 14], [20, 18]].filter(([t, p]) => h.extK(t, p, TH.ROOM_EXT)).length,
+    low: h.raw[0].y > 1 - TH.LOW_ZONE });
+}
+const roomHit = (h) => ({ anchor: palmMid(h), anchors: { wrist: { x: h.raw[0].x, y: h.raw[0].y }, mid: { x: h.raw[9].x, y: h.raw[9].y } } });
 
 // Ordered rule list. Two-hand rules are always evaluated before one-hand rules (sorted below) so a two-hand
 // pose is never read as a one-hand one. match() returns null or { anchor, anchors? } (normalized frame coords).
@@ -105,6 +130,11 @@ const RULES = [
       const crossed = Math.sign(lm[8].x - lm[12].x) !== Math.sign(lm[5].x - lm[9].x) && t < h.palm * TH.GOJO_CROSS;
       return crossed || t < h.palm * TH.GOJO_TOGETHER ? { anchor: tipMid(h) } : null; },
     loose: (h) => h.twoUp ? { anchor: tipMid(h) } : null },
+  { id: 'ROOM', hands: 1,
+    match(h, F) { const m = roomMetrics(h);
+      if (m.nExt >= 3) { const c = palmMid(h); F.zones.push({ x: c.x, y: c.y, r: h.hs, label: 'ROOM ny ' + m.ny.toFixed(2) + ' sp ' + m.spread.toFixed(2) + ' th ' + m.thumb.toFixed(2) + ' dn ' + m.drops }); }
+      return !m.low && m.nExt === 4 && m.ny > TH.ROOM_NY && m.drops >= TH.ROOM_TIPS_DOWN && m.spread > TH.ROOM_SPREAD && m.thumb > TH.ROOM_THUMB ? roomHit(h) : null; },
+    loose(h) { const m = roomMetrics(h); return !m.low && m.ny > TH.ROOM_NY_LOOSE && m.nExt >= 3 ? roomHit(h) : null; } },
 ].sort((a, b) => b.hands - a.hands); // stable: two-hand first, otherwise list order
 
 // hands = prepped list, off = Set of disabled ids. Also returns `loose`: hysteresis matches for every enabled rule.

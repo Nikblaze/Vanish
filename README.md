@@ -8,6 +8,7 @@ Works on **Microsoft Teams web** (`teams.microsoft.com`, `teams.live.com`, `team
 |---|---|
 | Index + middle finger on your forehead | **Instant Transmission**: fingertip glow, flicker, you vanish from the frame |
 | Index + middle crossed (or pressed together), hand raised | **Domain Expansion**: black void expands from your hand, starfield, everything goes dark |
+| **Room**: one hand palm-down, all five fingers spread and curved down like an upside-down bowl, hand above the bottom quarter of the frame | **Room**: particle ring, cyan dome expands past the frame, frame is sliced into tiles, you get scattered, tiles drift apart into black. Needs captured background |
 
 All visuals and sounds are generated in code. No third-party character art, clips, or audio are included.
 
@@ -35,7 +36,7 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 
 | Command | What it does |
 |---|---|
-| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`); ignores the Gestures toggles |
+| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`, `ROOM`; e.g. `__tlfxTest('ROOM')`); ignores the Gestures toggles |
 | `__tlfxSound(id)` | Play just the sound for 3 s (same ids) |
 | `__tlfx()` | Dump internal state (detector status, frames sent, state machine, mic mixing) |
 | `window.__tlfxDebug = true` | Draw onto the video: gesture + confidence, state / candidate / active effect, both hands' skeletons, rule zones, the smoothed anchor, and loose (hysteresis) matches |
@@ -64,6 +65,14 @@ Gesture thresholds (`TH`, ratios of hand/face size, so scale-invariant):
 | `IT_TIP_R` | `1.6` | Instant Transmission: both tips within `FOREHEAD_R × IT_TIP_R` of forehead centre |
 | `GOJO_CROSS` | `1.5` | Gojo crossed: tips swapped vs knuckles and within `palm × GOJO_CROSS` |
 | `GOJO_TOGETHER` | `0.9` | Gojo together: `dist(tip8, tip12) < palm × GOJO_TOGETHER` |
+| `LOW_ZONE` | `0.25` | shared: gestures need the wrist above the bottom `LOW_ZONE` of the frame (no desk/typing hands) |
+| `ROOM_EXT` | `1.0` | Room: looser finger-extended ratio (fingers curve down into a bowl) |
+| `ROOM_NY` | `0.55` | Room: `\|palm normal · y\| / \|normal\|`, palm plane roughly horizontal (palm down) |
+| `ROOM_NY_LOOSE` | `0.4` | Room hysteresis |
+| `ROOM_TIP_DROP` | `0.1` | Room: fingertip below its MCP by more than `ROOM_TIP_DROP × hand size` (curved down) |
+| `ROOM_TIPS_DOWN` | `3` | Room: at least this many of index..pinky tips dropped |
+| `ROOM_SPREAD` | `1.3` | Room: `dist(tip8, tip20) > ROOM_SPREAD × dist(mcp5, mcp17)`, fingers fanned |
+| `ROOM_THUMB` | `0.5` | Room: thumb spread, `dist(tip4, mcp5) > ROOM_THUMB × hand size` |
 
 ---
 
@@ -107,6 +116,7 @@ Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected). Rules l
 - finger extended: `dist(tip, wrist) > dist(pip, wrist) × 1.1`
 - **Instant Transmission**: index + middle up, ring + pinky down, both tips inside the forehead zone (face landmarks 10/151, radius from face width)
 - **Gojo**: same finger pose, tips crossed (left/right order swapped vs. knuckles) or pressed together
+- **Room**: palm normal `(lm5−lm0)×(lm17−lm0)` mostly vertical (`|ny|`, orientation-agnostic), ≥3 fingertips below their knuckles (palm-down bowl, not palm-up cup), fingers fanned (`tip8↔tip20` vs `mcp5↔mcp17`), thumb spread, wrist not in the bottom `LOW_ZONE`
 
 ### 4. State machine
 ```
