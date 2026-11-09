@@ -836,6 +836,120 @@
     osc('sine', 70, 30, at(0.9), 0.6, 0.5); // boom
   }
 
+  // KAMUI timeline (p 0→1 over the hold; reversed on cancel):
+  //  charge 0–0.40   a slow twist starts around the visible eye (small swirl radius), faint dark spiral arms appear
+  //  build  0.40–0.85 swirl radius grows to the whole frame, twist strengthens, slight inward pull, edges darken
+  //  climax 0.85–1.0 everything is sucked into a point at the eye (scale → ~0), spinning faster, brief pinpoint flash
+  //  end    p = 1    black frame while Leave is clicked
+  // Warp = WebGL fragment shader on the already-drawn main canvas (kmGL, lazy, permanently off on any failure → 2D stepped swirl).
+  const KM_FS = `precision mediump float;
+uniform sampler2D t; uniform vec2 res, c; uniform float ang, rad, s, dark;
+void main() {
+  vec2 p = gl_FragCoord.xy - c; float r = length(p);
+  float f = clamp(1.0 - r / rad, 0.0, 1.0); float a = ang * f * f;
+  float cs = cos(a), sn = sin(a);
+  vec2 q = vec2(cs * p.x - sn * p.y, sn * p.x + cs * p.y) / s;
+  vec2 uv = (q + c) / res;
+  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+  vec3 col = texture2D(t, uv).rgb * (1.0 - dark * smoothstep(0.15, 1.0, r / length(res)));
+  gl_FragColor = vec4(col, 1.0);
+}`;
+  let kmGL; // undefined = not tried, false = off for good, object = ready
+  function kmInit() {
+    const cv = document.createElement('canvas'), gl = cv.getContext('webgl', { premultipliedAlpha: false, preserveDrawingBuffer: false });
+    if (!gl) throw new Error('no webgl');
+    const sh = (type, src) => { const x = gl.createShader(type); gl.shaderSource(x, src); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+    const prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, 'attribute vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }'));
+    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, KM_FS));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+    gl.useProgram(prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
+    const al = gl.getAttribLocation(prog, 'a'); gl.enableVertexAttribArray(al); gl.vertexAttribPointer(al, 2, gl.FLOAT, false, 0, 0);
+    const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+    for (const [k, v] of [[gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE], [gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    const u = {}; for (const n of ['res', 'c', 'ang', 'rad', 's', 'dark']) u[n] = gl.getUniformLocation(prog, n);
+    return { cv, gl, prog, tex, u };
+  }
+  function kmWarp(ctx, W, H, C, ang, rad, sc, dark) { // true if the GL warp was drawn
+    if (kmGL === false) return false;
+    try {
+      if (kmGL === undefined) kmGL = kmInit();
+      const { cv, gl, tex, u } = kmGL;
+      if (gl.isContextLost()) throw new Error('context lost');
+      if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+      gl.viewport(0, 0, W, H);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, ctx.canvas);
+      gl.uniform2f(u.res, W, H); gl.uniform2f(u.c, C.x, H - C.y);
+      gl.uniform1f(u.ang, ang); gl.uniform1f(u.rad, rad); gl.uniform1f(u.s, sc); gl.uniform1f(u.dark, dark);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      ctx.drawImage(cv, 0, 0, W, H);
+      return true;
+    } catch (e) { kmGL = false; log('kamui webgl off', String(e)); return false; }
+  }
+  function fxKamui(ctx, f, p, a, s) {
+    const W = f.w, H = f.h, now = f.now, diag = Math.hypot(W, H);
+    if (p <= 0) return;
+    if (p >= 1) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); return; }
+    const C = { x: a.x * W, y: a.y * H };
+    const rad = 0.18 * H + (1.2 * diag - 0.18 * H) * ease(seg(p, 0.1, 0.85));
+    const ang = 0.8 * ease(seg(p, 0, 0.4)) + 5 * ease(seg(p, 0.4, 0.85)) + 10 * ease(seg(p, 0.85, 1));
+    const sc = Math.max(0.02, 1 - 0.3 * ease(seg(p, 0.4, 0.85)) - 0.68 * ease(seg(p, 0.85, 0.98)));
+    const dark = 0.6 * ease(seg(p, 0.4, 1));
+    if (!kmWarp(ctx, W, H, C, ang, rad, sc, dark)) { // 2D fallback: stepped swirl, outer ring first
+      const tc = f.tmp.getContext('2d');
+      tc.globalCompositeOperation = 'source-over'; tc.clearRect(0, 0, W, H); tc.drawImage(ctx.canvas, 0, 0, W, H);
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+      for (let i = 0; i < 8; i++) {
+        const rr = rad * (1 - i / 8), fr = Math.min(1, Math.max(0, 1 - rr / rad));
+        ctx.save(); ctx.beginPath(); ctx.arc(C.x, C.y, i ? rr : Math.max(rad, diag), 0, 6.2832); ctx.clip();
+        ctx.translate(C.x, C.y); ctx.rotate(-ang * fr * fr); ctx.scale(sc, sc); ctx.translate(-C.x, -C.y);
+        ctx.drawImage(f.tmp, 0, 0, W, H); ctx.restore();
+      }
+      const g = ctx.createRadialGradient(C.x, C.y, 0.15 * diag, C.x, C.y, diag);
+      g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, `rgba(0,0,0,${dark})`);
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    }
+    ctx.save(); // overlay: spiral arms, dark core, pinpoint flash
+    const e = seg(p, 0.05, 0.3) * (1 - seg(p, 0.9, 1)), rMax = Math.min(rad, diag);
+    if (e > 0.003) {
+      ctx.strokeStyle = `rgba(10,0,20,${0.35 * e})`; ctx.lineWidth = 3; ctx.lineCap = 'round';
+      const th1 = Math.log(rMax / 6) / 0.22;
+      for (let k = 0; k < 3; k++) {
+        const ph = now * 0.002 + ang * 0.3 + k * 2.0944;
+        ctx.beginPath();
+        for (let i = 0; i <= 24; i++) { const th = th1 * i / 24, r = 6 * Math.exp(0.22 * th); ctx[i ? 'lineTo' : 'moveTo'](C.x + Math.cos(th + ph) * r, C.y + Math.sin(th + ph) * r); }
+        ctx.stroke();
+      }
+    }
+    glow(ctx, C.x, C.y, 0.04 * H + 0.25 * H * ease(seg(p, 0.5, 1)), 'rgba(0,0,0,0.9)');
+    const fl = Math.sin(Math.PI * seg(p, 0.95, 1));
+    if (fl > 0.003) { ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = fl; glow(ctx, C.x, C.y, 0.05 * H, 'rgba(255,255,255,1)'); }
+    ctx.restore();
+  }
+  function soundKamui(b) {
+    const { ac, T, out, go, node, gain, osc, noise, holdS } = b, at = (p) => p * holdS, end = at(0.99) + 0.05, r = mkRnd(5);
+    const nb = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate), nd = nb.getChannelData(0);
+    for (let i = 0; i < nd.length; i++) nd[i] = r() * 2 - 1;
+    const src = ac.createBufferSource(), bp = node('bandpass', 1200), env = gain(0, out), lfo = ac.createOscillator();
+    src.buffer = nb; src.loop = true; bp.Q.value = 2; src.connect(bp).connect(env);
+    bp.frequency.setValueAtTime(1200, T); bp.frequency.exponentialRampToValueAtTime(250, T + at(0.97));
+    lfo.frequency.setValueAtTime(1.5, T); lfo.frequency.exponentialRampToValueAtTime(9, T + at(0.97)); lfo.connect(gain(300, bp.frequency));
+    env.gain.setValueAtTime(0, T); env.gain.linearRampToValueAtTime(0.35, T + at(0.85)); env.gain.linearRampToValueAtTime(0.5, T + at(0.95)); env.gain.exponentialRampToValueAtTime(0.0001, T + at(0.99));
+    go(src, 0, end); go(lfo, 0, end);
+    // warping tone: flat gain (osc() decays too early), vibrato depth grows
+    const o = ac.createOscillator(), tg = gain(0.1, out), vib = ac.createOscillator(), vg = gain(2, o.frequency);
+    o.type = 'sine'; o.frequency.setValueAtTime(320, T); o.frequency.exponentialRampToValueAtTime(70, T + at(0.97)); o.connect(tg);
+    tg.gain.setValueAtTime(0.1, T + at(0.9)); tg.gain.linearRampToValueAtTime(0.0001, T + at(0.97));
+    vib.frequency.value = 6; vib.connect(vg); vg.gain.setValueAtTime(2, T); vg.gain.linearRampToValueAtTime(30, T + at(0.95));
+    go(o, 0, at(0.97) + 0.05); go(vib, 0, at(0.97) + 0.05);
+    osc('sine', 60, 25, at(0.97), 0.5, 0.6); noise(at(0.97), 0.15, node('lowpass', 300), 0.4); // collapse thump
+  }
+
   // Effect registry. draw(ctx, frame, progress, anchor, state):
   //   frame = { w, h, video, tmp, now }; progress 0→1 over the hold (runs backwards while CANCELLING, 1 while LEAVING);
   //   anchor = smoothed primary anchor {x,y} in normalized output coords (detector frames are a downscale of the same,
@@ -872,6 +986,7 @@
     ROOM: { id: 'ROOM', label: 'Room (dome)', needsMask: true, needsBackgroundPlate: true, defaultAnchor: { x: 0.5, y: 0.45 }, draw: fxRoom, sound: soundRoom },
     SHADOW_CLONE: { id: 'SHADOW_CLONE', label: 'Shadow clone', needsMask: true, needsBackgroundPlate: true, defaultAnchor: { x: 0.5, y: 0.5 }, draw: fxClone, sound: soundClone },
     BANKAI: { id: 'BANKAI', label: 'Bankai (sword)', needsMask: true, needsBackgroundPlate: false, defaultAnchor: { x: 0.5, y: 0.6 }, draw: fxBankai, sound: soundBankai },
+    KAMUI: { id: 'KAMUI', label: 'Kamui (vortex)', needsMask: false, needsBackgroundPlate: false, defaultAnchor: { x: 0.45, y: 0.35 }, draw: fxKamui, sound: soundKamui },
   };
 
   function renderFx(ctx, w, h, video, tmp, now) {

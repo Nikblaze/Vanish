@@ -11,6 +11,7 @@ Works on **Microsoft Teams web** (`teams.microsoft.com`, `teams.live.com`, `team
 | **Room**: one hand palm-down, all five fingers spread and curved down like an upside-down bowl, hand above the bottom quarter of the frame | **Room**: particle ring, cyan dome expands past the frame, frame is sliced into tiles, you get scattered, tiles drift apart into black. Needs captured background |
 | **Shadow Clone**: both hands, index + middle pressed together on each, one pair vertical and the other horizontal forming a "+", crossing near their middles | **Shadow clone**: smoke puffs leave copies of you, the copies multiply, then everyone (you included) bursts into smoke and the room is empty. Needs captured background |
 | **Bankai**: one closed fist raised beside your head at about eye level, back of the hand to the camera, normal distance | **Bankai**: dark red aura rises around you, the room darkens, debris lifts, a black-red blade of light shoots horizontally out of your fist, then a slash splits the frame apart into black |
+| **Kamui**: one open hand covering one eye, the other eye visible | **Kamui**: space twists around your visible eye into a spiral vortex that sucks the whole frame into a point, then black |
 
 All visuals and sounds are generated in code. No third-party character art, clips, or audio are included.
 
@@ -38,7 +39,7 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 
 | Command | What it does |
 |---|---|
-| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`, `ROOM`, `SHADOW_CLONE`, `BANKAI`; e.g. `__tlfxTest('BANKAI')`); ignores the Gestures toggles |
+| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`, `ROOM`, `SHADOW_CLONE`, `BANKAI`, `KAMUI`; e.g. `__tlfxTest('BANKAI')`); ignores the Gestures toggles |
 | `__tlfxSound(id)` | Play just the sound for 3 s (same ids) |
 | `__tlfx()` | Dump internal state (detector status, frames sent, state machine, mic mixing) |
 | `window.__tlfxDebug = true` | Draw onto the video: gesture + confidence, state / candidate / active effect, both hands' skeletons, rule zones, the smoothed anchor, and loose (hysteresis) matches |
@@ -86,6 +87,10 @@ Gesture thresholds (`TH`, ratios of hand/face size, so scale-invariant):
 | `BK_EYE_LOOSE` | `1.0` | Bankai hysteresis |
 | `BK_NOFACE_Y` | `0.35` | Bankai with no face detected: palm centre in the top 35% of the frame |
 | `BK_THUMB_UP` | `0.5` | Bankai: rejects thumbs-up (thumb tip above index MCP by more than this × knuckle width) |
+| `KM_EXT_MIN` | `3` | Kamui: open hand over the eye, at least this many of index..pinky extended (rejects pinching glasses, rubbing an eye, fists) |
+| `KM_EYE_R` | `0.35` | Kamui: palm centre within this × face width of one eye centre |
+| `KM_CLEAR` | `0.18` | Kamui: the other eye is unobstructed, no hand landmark within this × face width of it |
+| `KM_EYE_R_LOOSE` | `0.55` | Kamui hysteresis (palm may drift; the clear-eye check is skipped) |
 
 ---
 
@@ -132,6 +137,7 @@ Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected). Rules l
 - **Shadow Clone**: two hands, each index+middle up and pressed together; each pair is one segment (knuckle mid to tip mid), the two are near-perpendicular (`|cos|`), one near-vertical and one near-horizontal, and cross near their middles
 - **Room**: palm normal `(lm5−lm0)×(lm17−lm0)` mostly vertical (`|ny|`, orientation-agnostic), ≥3 fingertips below their knuckles (palm-down bowl, not palm-up cup), fingers fanned (`tip8↔tip20` vs `mcp5↔mcp17`), thumb spread, wrist not in the bottom `LOW_ZONE`
 - **Bankai**: one closed fist (≤ `BK_MAX_EXT` of index..pinky extended), thumb not up, raised beside the head: palm centre at/above the eye line (`BK_EYE`) and to the side of the face (`BK_SIDE`). The face model runs only when a fist is visible
+- **Kamui**: one open hand (≥ `KM_EXT_MIN` fingers extended) whose palm centre is within `KM_EYE_R × face width` of one eye (face landmarks 33/133 and 362/263) while no hand landmark is within `KM_CLEAR` of the other eye; that visible eye is the vortex centre. The face model runs only when a hand with enough extended fingers is in the upper part of the frame
 
 ### 4. State machine
 ```
@@ -146,7 +152,7 @@ Arming delay, gap tolerance, hysteresis (once active, the rule's `loose` test is
 Add a rule (same `id`) to `RULES` in `detector.js` and an effect to `FX` in `inject.js` (`draw`, `sound`, `defaultAnchor`, flags). It appears in the Gestures toggles automatically.
 
 ### 5. Effects
-Canvas 2D compositing. Vanish = background plate masked to the person silhouette (`destination-in`), brightness-matched to the live frame to cancel camera auto-exposure, then the full plate once fully vanished. Void = expanding clip circle, seeded starfield, gradients. A local page overlay shows the countdown (only you see it).
+Canvas 2D compositing. Vanish = background plate masked to the person silhouette (`destination-in`), brightness-matched to the live frame to cancel camera auto-exposure, then the full plate once fully vanished. Kamui warps the frame with a WebGL fragment shader (one texture upload + one draw per frame; created lazily, falls back permanently to a 2D stepped-swirl of clipped rotated/scaled rings if WebGL is unavailable or the context is lost). Void = expanding clip circle, seeded starfield, gradients. A local page overlay shows the countdown (only you see it).
 
 ---
 
