@@ -115,6 +115,8 @@ const TH = {
   HP_THUMB: 0.6,  // HOLLOW_PURPLE: thumb out to the side — d(tip4, idxMCP5) > HP_THUMB * hs (GOJO's thumb is tucked; GOJO never checks it)
   HP_SPREAD: 1.15, // HOLLOW_PURPLE: index/middle tips spread in a V — d(tip8, tip12) > HP_SPREAD * palm. GOJO "together" is
                   //  < GOJO_TOGETHER (0.9) * palm, so 0.9–1.15 is a dead zone where neither fires.
+  RR_THUMB_UP: 0.25, // REVERSAL_RED: thumb tip above the index MCP by > RR_THUMB_UP * hs (thumb up — plain pointing has it tucked)
+  RR_THUMB_OUT: 0.45,// REVERSAL_RED: thumb not lying along the index: d(tip4, mcp5) > RR_THUMB_OUT * hs
   SC_CROSS: 0.7,    // SHADOW_CLONE: finger-segment midpoints closer than SC_CROSS * mean finger length (crossing near their middles)
 };
 
@@ -233,6 +235,15 @@ const RULES = [
       if (h1.ext.i && h2.ext.i) F.zones.push({ x: m.mid.x, y: m.mid.y, r: TH.HR_TIPS * m.hs / 2, label: 'HR tips ' + m.td.toFixed(2) + ' (<' + TH.HR_TIPS + ') idx ' + +idxOnly(h1) + +idxOnly(h2) });
       return idxOnly(h1) && idxOnly(h2) && m.td < TH.HR_TIPS ? m.hit : null; },
     loose(h1, h2, F) { if (!h1.ext.i || !h2.ext.i || nExt(h1) > 2 || nExt(h2) > 2) return null; const m = hrMetrics(h1, h2, F); return m.td < TH.HR_TIPS_LOOSE ? m.hit : null; } },
+  // Finger gun: thumb up, index extended (any direction, incl. at the lens), middle/ring/pinky curled. Before HOLLOW_PURPLE and BANKAI:
+  // fwdExt can read a curled middle as extended (finger gun would pass as a V), and BANKAI's fist tolerates one finger;
+  // this rule needs the middle plainly curled, which a V never has. Thumbs-up is excluded (index curled), plain pointing too (thumb not up).
+  { id: 'REVERSAL_RED', hands: 1,
+    match(h, F) { const fx = fwdExt(h), lm = h.lm, up = (lm[5].y - lm[4].y) / h.hs, out = d(lm[4], lm[5]) / h.hs, low = palmMid(h).y > 1 - TH.LOW_ZONE;
+      if (fx.i) F.zones.push({ x: h.raw[8].x, y: h.raw[8].y, r: 0.4 * h.hs, label: `RR i ${+fx.i} mrp ${+h.ext.m}${+h.ext.r}${+h.ext.p} up ${up.toFixed(2)} out ${out.toFixed(2)}` });
+      // curled check uses the plain 2D test: fwdExt's "short but straight" path reads folded fingers as extended (found on HOLLOW_PURPLE)
+      return fx.i && !h.ext.m && !h.ext.r && !h.ext.p && up > TH.RR_THUMB_UP && out > TH.RR_THUMB_OUT && !low ? { anchor: { x: h.raw[8].x, y: h.raw[8].y } } : null; },
+    loose(h) { return fwdExt(h).i && palmMid(h).y <= 1 - TH.LOW_ZONE && h.lm[4].y < h.lm[5].y ? { anchor: { x: h.raw[8].x, y: h.raw[8].y } } : null; } },
   { id: 'BANKAI', hands: 1,
     match(h, F) { if (nExt(h) > 2) return null; const m = bkMetrics(h, F), pc = m.hit.anchor;
       F.zones.push({ x: pc.x, y: pc.y, r: h.hs, label: 'BK ext ' + nExt(h) + ' th ' + +m.thumbUp + (m.dy == null ? ' noface' : ' dy ' + m.dy.toFixed(2) + ' side ' + m.side.toFixed(2)) });

@@ -1176,6 +1176,105 @@ void main() {
     osc('sine', 48, 20, at(0.9), 1.2, 0.8); noise(at(0.9), 0.6, node('lowpass', 150), 0.5); // sub-bass thump
   }
 
+  // REVERSAL_RED timeline (p 0→1 over the hold; reversed on cancel):
+  //  charge 0–0.40   a tiny red dot appears on the index tip and pulses, sparks start being drawn into it
+  //  build  0.40–0.85 it charges brighter: growing glow, crackling arcs, more sparks, red vignette creeps in;
+  //                  recoil at 0.80–0.85: frame shake + the tip flashes white
+  //  climax 0.85–1.0 the beam fires at the viewer: a red point at the tip blows open into a burning hole with crackling
+  //                  ember edges, white-hot centre; the screen floods red, then fades toward near-black red
+  //  end    p = 1    near-black red frame while Leave is clicked
+  const RR_SP = (() => { const r = mkRnd(123); return Array.from({ length: 36 }, () => ({ a: r() * 6.283, ph: r(), sp: 0.7 + r() * 0.6 })); })();
+  const RR_EM = (() => { const r = mkRnd(321); return Array.from({ length: 30 }, () => ({ a: r() * 6.283, sp: 0.7 + r() * 0.6, ph: r() })); })();
+  function fxReversal(ctx, f, p, a) {
+    const W = f.w, H = f.h, now = f.now, diag = Math.hypot(W, H), TAU = 6.2832;
+    if (p <= 0) return;
+    const T = { x: a.x * W, y: a.y * H }, e = (x, y) => ease(seg(p, x, y));
+    if (p >= 1) {
+      ctx.fillStyle = 'rgb(22,0,0)'; ctx.fillRect(0, 0, W, H);
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; glow(ctx, T.x, T.y, 0.5 * H, 'rgba(80,0,0,0.5)'); ctx.restore();
+      return;
+    }
+    if (p > 0.4) { // 1 red vignette
+      const g = ctx.createRadialGradient(T.x, T.y, 0.25 * diag, T.x, T.y, diag);
+      g.addColorStop(0, 'rgba(120,0,0,0)'); g.addColorStop(1, `rgba(120,0,0,${0.45 * e(0.4, 0.85)})`);
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    }
+    const fade = 1 - seg(p, 0.85, 0.9), r = (0.004 * H + 0.03 * H * e(0.02, 0.85)) * (1 + 0.25 * Math.sin(now / (70 - 40 * e(0, 0.85))));
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    if (fade > 0) { // 2 dot / charge
+      glow(ctx, T.x, T.y, r * 6, `rgba(255,30,20,${0.35 * fade})`);
+      glow(ctx, T.x, T.y, r * 2.2, `rgba(255,60,40,${0.85 * fade})`);
+      glow(ctx, T.x, T.y, r, `rgba(255,235,225,${fade})`);
+    }
+    if (p >= 0.05 && p < 0.85) { // 3 sparks drawn in
+      ctx.lineWidth = 1.5;
+      const n = Math.round(8 + 28 * e(0.05, 0.85));
+      for (let i = 0; i < n; i++) {
+        const q = RR_SP[i], u = (now * 0.0011 * q.sp + q.ph) % 1, rr = r * 2 + 0.25 * H * (1 - u) ** 2, c = Math.cos(q.a), s = Math.sin(q.a), l = 0.02 * H * (1 - u);
+        const x = T.x + c * rr, y = T.y + s * rr;
+        ctx.strokeStyle = `rgba(255,120,80,${u * fade})`; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - c * l, y - s * l); ctx.stroke();
+      }
+    }
+    if (p >= 0.4 && p < 0.88) { // 4 crackling arcs
+      ctx.lineWidth = 1.2; ctx.strokeStyle = `rgba(255,200,180,${0.8 * e(0.4, 0.6) * fade})`;
+      for (let k = 0; k < 3; k++) {
+        const R = r * (1.6 + Math.random()), a0 = Math.random() * TAU;
+        ctx.beginPath();
+        for (let j = 0; j < 6; j++) { const an = a0 + j / 5, rj = R + (Math.random() * 2 - 1) * 0.3 * r; ctx[j ? 'lineTo' : 'moveTo'](T.x + Math.cos(an) * rj, T.y + Math.sin(an) * rj); }
+        ctx.stroke();
+      }
+    }
+    if (p >= 0.8 && p < 0.86) glow(ctx, T.x, T.y, 0.12 * H, `rgba(255,255,255,${0.95 * Math.sin(Math.PI * seg(p, 0.8, 0.86))})`); // 5 recoil flash
+    ctx.restore();
+    if (p >= 0.85) { // 6 burning hole
+      const q = seg(p, 0.85, 1), Rh = 1.15 * diag * ease(seg(q, 0, 0.75)) ** 2 + 0.01 * H;
+      const R = (th) => Rh * (1 + 0.07 * Math.sin(7 * th + now / 45) + 0.05 * Math.sin(13 * th - now / 33) + 0.03 * Math.sin(23 * th + now / 21));
+      const edge = () => { ctx.beginPath(); for (let i = 0; i < 40; i++) { const th = i / 40 * TAU, rr = R(th); ctx[i ? 'lineTo' : 'moveTo'](T.x + Math.cos(th) * rr, T.y + Math.sin(th) * rr); } ctx.closePath(); };
+      const g = ctx.createRadialGradient(T.x, T.y, 0, T.x, T.y, Rh);
+      for (const [o, c] of [[0, 'rgba(255,250,235,1)'], [0.45, 'rgba(255,140,60,1)'], [0.8, 'rgba(230,30,10,1)'], [1, 'rgba(160,0,0,1)']]) g.addColorStop(o, c);
+      edge(); ctx.fillStyle = g; ctx.fill();
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      edge(); ctx.lineWidth = Math.max(3, Rh * 0.03); ctx.strokeStyle = 'rgba(255,190,60,0.9)'; ctx.stroke();
+      ctx.lineWidth = Math.max(8, Rh * 0.08); ctx.strokeStyle = 'rgba(255,80,0,0.35)'; ctx.stroke();
+      if (Rh < diag) for (const m of RR_EM) {
+        const off = (now * 0.08 * m.sp + m.ph * 200) % (0.12 * H), dd = R(m.a) + off;
+        ctx.fillStyle = `rgba(255,170,60,${1 - off / (0.12 * H)})`; ctx.fillRect(T.x + Math.cos(m.a) * dd, T.y + Math.sin(m.a) * dd, 2 + (m.ph > 0.5), 2 + (m.ph > 0.5));
+      }
+      ctx.restore();
+      const dk = ease(seg(q, 0.82, 1)); // flood fades to near-black red
+      if (dk > 0) { ctx.fillStyle = `rgba(20,0,0,${dk})`; ctx.fillRect(0, 0, W, H); }
+    }
+    if (p >= 0.8 && p < 0.9) { // 7 shake (last)
+      const amp = 0.02 * W * Math.sin(Math.PI * seg(p, 0.8, 0.9));
+      if (amp >= 0.5) {
+        const dx = amp * (Math.sin(now * 0.091) + Math.sin(now * 0.137)) / 2, dy = amp * (Math.sin(now * 0.113) + Math.sin(now * 0.071)) / 2, sc = 1 + 2.5 * amp / W;
+        ctx.save(); ctx.translate(W / 2 + dx, H / 2 + dy); ctx.scale(sc, sc); ctx.translate(-W / 2, -H / 2); ctx.drawImage(ctx.canvas, 0, 0, W, H); ctx.restore();
+      }
+    }
+  }
+  function soundReversal(b) {
+    const { ac, T, out, go, node, gain, osc, noise, holdS } = b, at = (p) => p * holdS;
+    { // rising electric whine: sawtooth through a following bandpass, 8→30 Hz tremolo
+      const o = ac.createOscillator(), bp = node('bandpass', 300), wg = gain(0, out), l = ac.createOscillator(), end = at(0.85) + 0.02;
+      o.type = 'sawtooth'; bp.Q.value = 6;
+      for (const fr of [o.frequency, bp.frequency]) { fr.setValueAtTime(300, T); fr.exponentialRampToValueAtTime(2600, T + at(0.85)); }
+      o.connect(bp).connect(wg);
+      wg.gain.setValueAtTime(0, T); wg.gain.linearRampToValueAtTime(0.12, T + at(0.8)); wg.gain.setValueAtTime(0.12, T + at(0.85)); wg.gain.exponentialRampToValueAtTime(0.0001, T + end);
+      l.frequency.setValueAtTime(8, T); l.frequency.exponentialRampToValueAtTime(30, T + at(0.85)); l.connect(gain(0.04, wg.gain));
+      go(o, 0, end + 0.05); go(l, 0, end + 0.05);
+    }
+    noise(at(0.8), 0.04, node('highpass', 1500), 0.4); // recoil click
+    { const t = at(0.85); noise(t, 0.09, node('highpass', 2500), 0.9); osc('square', 2200, 90, t, 0.12, 0.25); osc('sine', 120, 40, t, 0.5, 0.6); } // crack
+    { // rumbling burn: looping noise + 42 Hz sub
+      const bs = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate), dt = bs.getChannelData(0);
+      for (let i = 0; i < dt.length; i++) dt[i] = Math.random() * 2 - 1;
+      const s = ac.createBufferSource(), ng = gain(0, out), o = ac.createOscillator(), og = gain(0, out), end = at(1) + 0.6;
+      s.buffer = bs; s.loop = true; s.connect(node('lowpass', 320)).connect(ng); o.type = 'sine'; o.frequency.value = 42; o.connect(og);
+      for (const [gn, v] of [[ng, 0.5], [og, 0.25]]) { gn.gain.setValueAtTime(0, T + at(0.85)); gn.gain.linearRampToValueAtTime(v, T + at(0.9)); gn.gain.exponentialRampToValueAtTime(0.0001, T + end); }
+      go(s, 0, at(1) + 0.7); go(o, 0, at(1) + 0.7);
+    }
+  }
+
   // Effect registry. draw(ctx, frame, progress, anchor, state):
   //   frame = { w, h, video, tmp, now }; progress 0→1 over the hold (runs backwards while CANCELLING, 1 while LEAVING);
   //   anchor = smoothed primary anchor {x,y} in normalized output coords (detector frames are a downscale of the same,
@@ -1215,6 +1314,7 @@ void main() {
     KAMUI: { id: 'KAMUI', label: 'Kamui (vortex)', needsMask: false, needsBackgroundPlate: false, defaultAnchor: { x: 0.45, y: 0.35 }, draw: fxKamui, sound: soundKamui },
     HOLLOW_RED: { id: 'HOLLOW_RED', label: 'Red (fused orbs)', needsMask: false, needsBackgroundPlate: false, defaultAnchor: { x: 0.5, y: 0.5 }, draw: fxRed, sound: soundRed },
     HOLLOW_PURPLE: { id: 'HOLLOW_PURPLE', label: 'Purple (black hole)', needsMask: false, needsBackgroundPlate: false, armSteady: 0.05, defaultAnchor: { x: 0.5, y: 0.45 }, draw: fxPurple, sound: soundPurple },
+    REVERSAL_RED: { id: 'REVERSAL_RED', label: 'Reversal (red beam)', needsMask: false, needsBackgroundPlate: false, armSteady: 0.05, defaultAnchor: { x: 0.55, y: 0.45 }, draw: fxReversal, sound: soundReversal },
   };
 
   function renderFx(ctx, w, h, video, tmp, now) {
