@@ -109,6 +109,11 @@ const TH = {
   KM_TIP_R_LOOSE: 0.6, // KAMUI hysteresis (and only 2 of the 3 fingers need to stay extended)
   HR_TIPS: 0.6,       // HOLLOW_RED: index tips closer than HR_TIPS * mean hand size (hs). Static pose, no approach check.
   HR_TIPS_LOOSE: 1.0, // HOLLOW_RED hysteresis: both index fingers up (≤ 2 extended each), tips within this * mean hs
+  FWD_STRAIGHT: 0.6, // finger pointing at the camera: 3D cos between (pip−mcp) and (tip−pip) > this (PIP not bent)
+  FWD_Z: 0.25,       // ...and tip closer to the camera than its MCP by FWD_Z * hs (MediaPipe z: smaller = closer)
+  FWD_SHORT: 0.55,   // ...or 2D tip–MCP length < FWD_SHORT * hs (foreshortened but straight)
+  HP_THUMB: 0.7,  // HOLLOW_PURPLE: thumb out to the side — d(tip4, idxMCP5) > HP_THUMB * hs (GOJO's thumb is tucked; GOJO never checks it)
+  HP_TOG: 1.2,    // HOLLOW_PURPLE: index+middle together — d(tip8, tip12) < HP_TOG * palm (palm = d(lm5, lm9))
   SC_CROSS: 0.7,    // SHADOW_CLONE: finger-segment midpoints closer than SC_CROSS * mean finger length (crossing near their middles)
 };
 
@@ -121,6 +126,16 @@ function prepHand(raw, ar, score) {
 }
 const tipMid = (h) => ({ x: (h.raw[8].x + h.raw[12].x) / 2, y: (h.raw[8].y + h.raw[12].y) / 2 });
 const palmMid = (h) => { const p = [0, 5, 9, 13, 17].map((i) => h.raw[i]); return { x: p.reduce((a, l) => a + l.x, 0) / 5, y: p.reduce((a, l) => a + l.y, 0) / 5 }; };
+// Foreshortening-tolerant "extended": plain 2D ext fails when a finger points at the lens; a curled finger is rejected by
+// the PIP-bend check. Cached on h._fx.
+const cos3 = (a, b, c, e) => { const u = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z }, v = { x: e.x - c.x, y: e.y - c.y, z: e.z - c.z }; return (u.x * v.x + u.y * v.y + u.z * v.z) / ((Math.hypot(u.x, u.y, u.z) * Math.hypot(v.x, v.y, v.z)) || 1e-6); };
+function fwdExt(h) {
+  if (h._fx) return h._fx;
+  const lm = h.lm, f = {};
+  for (const [k, mcp, pip, tip] of [['i', 5, 6, 8], ['m', 9, 10, 12], ['r', 13, 14, 16], ['p', 17, 18, 20]])
+    f[k] = h.ext[k] || (cos3(lm[mcp], lm[pip], lm[pip], lm[tip]) > TH.FWD_STRAIGHT && (lm[tip].z < lm[mcp].z - TH.FWD_Z * h.hs || d(lm[tip], lm[mcp]) < TH.FWD_SHORT * h.hs));
+  return (h._fx = f);
+}
 function roomMetrics(h) {
   if (h._room) return h._room;
   const lm = h.lm, a = { x: lm[5].x - lm[0].x, y: lm[5].y - lm[0].y, z: lm[5].z - lm[0].z }, b = { x: lm[17].x - lm[0].x, y: lm[17].y - lm[0].y, z: lm[17].z - lm[0].z };
@@ -226,6 +241,14 @@ const RULES = [
   { id: 'INSTANT_TRANSMISSION', hands: 1,
     match(h, F) { if (!h.twoUp) return null; const fz = F.forehead(); if (!fz) return null; const R = fz.r * TH.IT_TIP_R; return d(h.lm[8], fz.c) < R && d(h.lm[12], fz.c) < R ? { anchor: tipMid(h) } : null; },
     loose: (h) => h.twoUp ? { anchor: tipMid(h) } : null },
+  // same index+middle pose as GOJO; the thumb is the differentiator, so this must be checked before GOJO
+  { id: 'HOLLOW_PURPLE', hands: 1,
+    match(h, F) { const fx = fwdExt(h), lm = h.lm, thumb = d(lm[4], lm[5]) / h.hs, tog = d(lm[8], lm[12]) / h.palm, low = palmMid(h).y > 1 - TH.LOW_ZONE, tm = tipMid(h);
+      if (fx.i && fx.m) F.zones.push({ x: tm.x, y: tm.y, r: 0.5 * h.hs, label: `HP i m r p ${+fx.i}${+fx.m}${+fx.r}${+fx.p} th ${thumb.toFixed(2)} tog ${tog.toFixed(2)}` });
+      if (!(fx.i && fx.m && !fx.r && !fx.p && thumb > TH.HP_THUMB && tog < TH.HP_TOG && !low)) return null;
+      const fz = F.forehead(), R = fz && fz.r * TH.IT_TIP_R; // tips on the forehead = INSTANT_TRANSMISSION
+      return fz && d(lm[8], fz.c) < R && d(lm[12], fz.c) < R ? null : { anchor: tm }; },
+    loose(h) { const fx = fwdExt(h); return fx.i && fx.m && palmMid(h).y <= 1 - TH.LOW_ZONE ? { anchor: tipMid(h) } : null; } },
   { id: 'GOJO', hands: 1,
     // a second hand close by = a (maybe partly hidden) SHADOW_CLONE seal, never one-hand GOJO
     match(h, F) { if (!h.twoUp || F.hands.some((x) => x !== h && d(x.lm[0], h.lm[0]) < TH.SC_NEAR * h.hs)) return null; const lm = h.lm, t = d(lm[8], lm[12]);

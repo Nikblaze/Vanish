@@ -13,6 +13,7 @@ Works on **Microsoft Teams web** (`teams.microsoft.com`, `teams.live.com`, `team
 | **Bankai**: one closed fist raised beside your head at about eye level, back of the hand to the camera, normal distance | **Bankai**: dark red aura rises around you, the room darkens, debris lifts, a black-red blade of light shoots horizontally out of your fist, then a slash splits the frame apart into black |
 | **Kamui**: index, middle and ring fingers laid over one eye | **Kamui**: a dark spinning vortex opens around your visible eye, the view zooms in as it spirals faster, then a black core swallows the frame |
 | **Hollow Red**: both hands pointing with just the index finger, index tips held close together | **Red**: a red orb on one fingertip and a blue orb on the other spiral into each other and fuse into a crimson singularity that bends light and swallows the frame; black with a fading crimson ring |
+| **Hollow Purple**: one hand, thumb + index + middle extended, index and middle together pointing forward (at the camera) or up-forward, thumb out to the side, ring + pinky curled, hand raised and held still | **Purple**: a white-violet spark at the fingertips, then a purple orb with a black core and a spinning accretion ring; the black hole pulls the frame in and swallows it; black with a fading purple ring |
 
 All visuals and sounds are generated in code. No third-party character art, clips, or audio are included.
 
@@ -40,7 +41,7 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 
 | Command | What it does |
 |---|---|
-| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`, `ROOM`, `SHADOW_CLONE`, `BANKAI`, `KAMUI`, `HOLLOW_RED`; e.g. `__tlfxTest('BANKAI')`); ignores the Gestures toggles |
+| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`, `ROOM`, `SHADOW_CLONE`, `BANKAI`, `KAMUI`, `HOLLOW_RED`, `HOLLOW_PURPLE`; e.g. `__tlfxTest('BANKAI')`); ignores the Gestures toggles |
 | `__tlfxSound(id)` | Play just the sound for 3 s (same ids) |
 | `__tlfx()` | Dump internal state (detector status, frames sent, state machine, mic mixing) |
 | `window.__tlfxDebug = true` | Draw onto the video: gesture + confidence, state / candidate / active effect, both hands' skeletons, rule zones, the smoothed anchor, and loose (hysteresis) matches |
@@ -56,6 +57,7 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 | Cancel reverse animation | `CANCEL_MS` in `inject.js` | `600` ms |
 | Preview length | `TEST_MS` in `inject.js` | `4000` ms |
 | Anchor smoothing (weight of newest anchor) | `ANCHOR_EMA` in `inject.js` | `0.5` |
+| Steady-arming radius (per effect, optional `armSteady`, normalized frame units) | `FX` in `inject.js` | `HOLLOW_PURPLE`: `0.05`; others none |
 | Detector start delay | `sendTick()` in `inject.js` | `4000` ms after camera start |
 | Gesture thresholds | `TH` at the top of `detector.js` | see below |
 
@@ -92,6 +94,11 @@ Gesture thresholds (`TH`, ratios of hand/face size, so scale-invariant):
 | `KM_TIP_R_LOOSE` | `0.6` | Kamui hysteresis (2 of the 3 fingers may stay extended) |
 | `HR_TIPS` | `0.6` | Hollow Red: index tips closer than this × mean hand size. Static pose, no approach check |
 | `HR_TIPS_LOOSE` | `1.0` | Hollow Red hysteresis: both index fingers up (≤ 2 extended each), tips within this × mean hand size |
+| `FWD_STRAIGHT` | `0.6` | shared `fwdExt`: finger pointing at the camera counts as extended if 3D `cos((pip−mcp), (tip−pip))` is above this (PIP not bent) |
+| `FWD_Z` | `0.25` | `fwdExt`: ...and tip closer to the camera than its MCP by more than `FWD_Z × hand size` (MediaPipe z, smaller = closer) |
+| `FWD_SHORT` | `0.55` | `fwdExt`: ...or 2D tip–MCP length below `FWD_SHORT × hand size` (foreshortened but straight) |
+| `HP_THUMB` | `0.7` | Hollow Purple: thumb out to the side, `dist(tip4, mcp5) > HP_THUMB × hand size` (Gojo's thumb is tucked and never checked) |
+| `HP_TOG` | `1.2` | Hollow Purple: index+middle together, `dist(tip8, tip12) < HP_TOG × palm` |
 
 ---
 
@@ -140,6 +147,7 @@ Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected). Rules l
 - **Bankai**: one closed fist (≤ `BK_MAX_EXT` of index..pinky extended), thumb not up, raised beside the head: palm centre at/above the eye line (`BK_EYE`) and to the side of the face (`BK_SIDE`). The face model runs only when a fist is visible
 - **Kamui**: index, middle and ring extended with their fingertip centroid within `KM_TIP_R` face widths of one eye (face model, only for a hand with at least 2 of those fingers up in the top 70% of the frame); the effect centres on the other eye
 - **Hollow Red**: two hands, each with only the index finger extended (middle, ring, pinky curled), index tips closer than `HR_TIPS` × mean hand size. Static pose; the red/blue orbs start on the left/right tips (by x)
+- **Hollow Purple**: one hand with index + middle extended (via the shared `fwdExt` helper, which also accepts fingers pointing at the lens: PIP not bent and the tip nearer the camera than its knuckle, or foreshortened), ring + pinky curled, tips together (`HP_TOG`), thumb out to the side (`HP_THUMB`), wrist not in `LOW_ZONE`. Same finger pose as Gojo, so the thumb is the differentiator and this rule is checked first. Rejected when both tips sit in the Instant Transmission forehead zone. The effect arms with steady-arming (`armSteady`): the anchor must stay within 0.05 of where arming started, else the arming timer restarts, so a casual "counting three" gesture doesn't trigger it
 
 ### 4. State machine
 ```

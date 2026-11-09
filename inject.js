@@ -18,7 +18,7 @@
 
   // ---------- shared state machine (one, global; every stream's draw loop renders from it) ----------
   const S = { st: 'IDLE', kind: null, t0: 0, lastHold: 0, t1: 0, leaveAt: 0, test: false,
-    cand: null, candStart: 0, candLast: 0, tip: { x: 0.5, y: 0.4 }, cx: 0.5, capAt: 0, stepT: 0,
+    cand: null, candStart: 0, candLast: 0, candA: null, tip: { x: 0.5, y: 0.4 }, cx: 0.5, capAt: 0, stepT: 0,
     tc: 0, pc: 0, raw: null, rawAt: 0, sm: null, smId: null, mem: {} };
   let lastRecv = 0, haveMask = false, plateImg = null;
   const maskCv = document.createElement('canvas'), maskHard = document.createElement('canvas');
@@ -198,7 +198,7 @@
     setSt('CANCELLING');
   }
   const ease = (x) => 1 - (1 - x) ** 3;
-  function toIdle() { S.gain = 0; setSt('IDLE'); S.kind = null; S.cand = null; S.sm = null; S.smId = null; S.raw = null; haveMask = false; stopSound(); }
+  function toIdle() { S.gain = 0; setSt('IDLE'); S.kind = null; S.cand = null; S.candA = null; S.sm = null; S.smId = null; S.raw = null; haveMask = false; stopSound(); }
 
   const progress = (now) => S.st === 'LEAVING' ? 1 : S.st === 'CANCELLING' ? S.pc * Math.max(0, 1 - (now - S.t1) / CANCEL_MS)
     : S.st === 'ACTIVE' ? Math.min(1, (now - S.t0) / (S.test ? TEST_MS : LEAVE_MS)) : 0;
@@ -217,8 +217,12 @@
     }
     if (S.st === 'IDLE') {
       if (FX[g] && !offSet.has(g)) {
-        if (S.cand !== g || now - S.candLast > 500) { S.cand = g; S.candStart = now; }
+        if (S.cand !== g || now - S.candLast > 500) { S.cand = g; S.candStart = now; S.candA = null; }
         S.candLast = now;
+        if (FX[g].armSteady && r.anchor) { // casual "counting three" moves; a deliberate held pose doesn't
+          if (!S.candA) S.candA = { ...r.anchor };
+          else if (Math.hypot(r.anchor.x - S.candA.x, r.anchor.y - S.candA.y) > FX[g].armSteady) { S.candStart = now; S.candA = { ...r.anchor }; }
+        }
         if (now - S.candStart >= ARM_MS) activate(g, now, false);
       }
     } else if (S.st === 'ACTIVE' && !S.test && (g === S.kind || r.loose?.[S.kind])) S.lastHold = now; // loose = hysteresis
@@ -229,7 +233,7 @@
     if (now - S.stepT < 8) return;
     S.stepT = now;
     if (S.capAt && now >= S.capAt) { S.capAt = 0; capturePlate(); }
-    if (S.st === 'IDLE' && S.cand && now - S.candLast > 500) { S.cand = null; updateDebug(); }
+    if (S.st === 'IDLE' && S.cand && now - S.candLast > 500) { S.cand = null; S.candA = null; updateDebug(); }
     if (S.st === 'ACTIVE') {
       if (S.test ? now - S.t0 >= TEST_MS : now - S.lastHold > GAP_MS) cancel(now);
       else if (!S.test && now - S.t0 >= LEAVE_MS) { setSt('LEAVING'); S.leaveAt = now; leaveMeeting(); }
@@ -1029,6 +1033,91 @@ void main() {
     go(d, 0, at(1) + 0.5);
   }
 
+  // HOLLOW_PURPLE timeline (p 0→1 over the hold; reversed on cancel):
+  //  charge 0–0.40   a white-violet spark flares at the fingertips with thin flickering light rays
+  //  build  0.40–0.85 it condenses into a small purple orb with a black core and a spinning accretion ring (0.40–0.65);
+  //                  the black hole grows, pulling radial light streaks and dust inward, lensing the frame at its edge
+  //  climax 0.85–1.0 it swallows the whole frame into black
+  //  end    p = 1    black screen with a faint purple ring fading out while Leave is clicked
+  const PU_RAYS = (() => { const r = mkRnd(99); return Array.from({ length: 14 }, () => ({ a: r() * 6.283, l: r() })); })();
+  const PU_STR = (() => { const r = mkRnd(77); return Array.from({ length: 36 }, () => ({ a: r() * 6.283, ph: r(), sp: 0.7 + r() * 0.6 })); })();
+  function fxPurple(ctx, f, p, a, s) {
+    const W = f.w, H = f.h, now = f.now, diag = Math.hypot(W, H), m = s.mem;
+    if (p <= 0) return;
+    const C = { x: a.x * W, y: a.y * H }, disc = (r) => { ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(C.x, C.y, r, 0, 6.2832); ctx.fill(); };
+    const ring = (r, lw, c) => { ctx.strokeStyle = c; ctx.lineWidth = lw; ctx.beginPath(); ctx.arc(C.x, C.y, r, 0, 6.2832); ctx.stroke(); };
+    if (p >= 1) {
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      ring(0.12 * H, 3, `rgba(170,90,255,${0.5 * Math.max(0, 1 - ((s.t || 0) - LEAVE_MS) / 1500)})`);
+      ctx.restore(); return;
+    }
+    if (p < 0.5) { // spark + rays
+      const e = ease(seg(p, 0, 0.3)) * (1 - seg(p, 0.4, 0.5));
+      if (e > 0) {
+        ctx.save(); ctx.globalCompositeOperation = 'lighter';
+        glow(ctx, C.x, C.y, 0.06 * H * e * (1 + 0.15 * Math.sin(now / 40)), `rgba(255,255,255,${0.95 * e})`);
+        glow(ctx, C.x, C.y, 0.15 * H * e, `rgba(190,120,255,${0.5 * e})`);
+        ctx.strokeStyle = `rgba(230,210,255,${0.7 * e})`; ctx.lineWidth = 1.5; ctx.beginPath();
+        PU_RAYS.forEach((q, i) => {
+          const L = (0.06 * H + 0.14 * H * q.l * e) * (0.75 + 0.25 * Math.sin(now / 30 + i * 7)), c = Math.cos(q.a), n = Math.sin(q.a);
+          ctx.moveTo(C.x + c * 0.02 * H * e, C.y + n * 0.02 * H * e); ctx.lineTo(C.x + c * L, C.y + n * L);
+        });
+        ctx.stroke(); ctx.restore();
+      }
+    }
+    const o = ease(seg(p, 0.4, 0.65));
+    let rc = 0.02 * H * o;
+    if (p >= 0.55) { // black-hole lens (Kamui shader, bands off, violet rim)
+      const dt = m.pt ? Math.min(0.1, Math.max(0, (now - m.pt) / 1000)) : 0; m.pt = now; m.pp = (m.pp || 0) + 1.5 * dt; // spin 1.5 rad/s
+      const e1 = ease(seg(p, 0.55, 0.85)), e2 = ease(seg(p, 0.85, 1)); rc = 0.02 * H + 0.07 * H * e1 + 1.2 * diag * e2 ** 2;
+      const k = { ph: m.pp, ang: 0.6, vort: 0.6 * e1 + 0.4 * e2, rad: rc * 7 + 0.2 * H, s: 1, blur: 0.04, dark: 0.55 * e2, core: rc, bands: 0, rimc: [0.9, 0.4, 1.6] };
+      if (!kmWarp(ctx, W, H, C, k)) { // no WebGL: black disk + violet ring
+        disc(rc);
+        ctx.save(); ctx.globalCompositeOperation = 'lighter'; ring(rc * 1.3, Math.max(2, rc * 0.25), 'rgba(170,90,255,0.9)'); ctx.restore();
+      }
+    }
+    if (p >= 0.4) {
+      const rx = rc * 2.6 + 0.02 * H * o, ry = rx * 0.32, ra = o * (1 - seg(p, 0.9, 0.95)), spin = now * 0.004;
+      const half = (front) => { // accretion ring half: back = angles π..2π, front = 0..π
+        const a0 = front ? 0 : Math.PI;
+        ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+        ctx.strokeStyle = `rgba(150,80,255,${0.35 * ra})`; ctx.lineWidth = 8; ctx.beginPath(); ctx.ellipse(C.x, C.y, rx, ry, -0.35, a0, a0 + Math.PI); ctx.stroke();
+        ctx.strokeStyle = `rgba(220,180,255,${0.9 * ra})`; ctx.lineWidth = 3; ctx.stroke();
+        ctx.strokeStyle = `rgba(255,240,255,${0.9 * ra})`; ctx.lineWidth = 2;
+        for (let i = 0; i < 30; i++) {
+          const an = (i * 0.209 + spin) % 6.2832;
+          if ((Math.sin(an) > 0) === front) { ctx.beginPath(); ctx.ellipse(C.x, C.y, rx, ry, -0.35, an, an + 0.1); ctx.stroke(); }
+        }
+        ctx.restore();
+      };
+      if (rx < diag && ra > 0) half(false);
+      if (rc > 0.5) disc(rc);
+      if (rx < diag && ra > 0) half(true);
+    }
+    if (p >= 0.5 && p < 0.95) { // inward streaks + dust
+      const it = seg(p, 0.5, 0.6) * (1 - seg(p, 0.9, 0.95));
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineWidth = 1.5;
+      for (const q of PU_STR) {
+        const u = (now * 0.0007 * q.sp + q.ph) % 1, r1 = rc * 1.4 + 0.6 * diag * (1 - u) ** 2, r0 = r1 + 0.04 * H * (1 - u), an = q.a + 0.6 * u, c = Math.cos(an), n = Math.sin(an), al = 0.6 * u * it;
+        ctx.strokeStyle = `rgba(200,160,255,${al})`; ctx.beginPath(); ctx.moveTo(C.x + c * r0, C.y + n * r0); ctx.lineTo(C.x + c * r1, C.y + n * r1); ctx.stroke();
+        ctx.fillStyle = `rgba(200,160,255,${al})`; ctx.fillRect(C.x + c * r1 - 1, C.y + n * r1 - 1, 2, 2);
+      }
+      ctx.restore();
+    }
+  }
+  function soundPurple(b) {
+    const { ac, T, out, go, node, gain, osc, noise, holdS } = b, at = (p) => p * holdS, r = mkRnd(31);
+    const hg = gain(0, out), lp = node('lowpass', 150), end = at(0.9) + 0.05; // rising hum: flat gain (osc() decays too early)
+    hg.gain.setValueAtTime(0, T); hg.gain.linearRampToValueAtTime(0.22, T + at(0.8)); hg.gain.exponentialRampToValueAtTime(0.0001, T + at(0.9));
+    lp.frequency.setValueAtTime(150, T); lp.frequency.exponentialRampToValueAtTime(1200, T + at(0.85)); lp.connect(hg);
+    for (const [type, dst] of [['sine', hg], ['sawtooth', lp]]) {
+      const o = ac.createOscillator(); o.type = type; o.frequency.setValueAtTime(55, T); o.frequency.exponentialRampToValueAtTime(110, T + at(0.85)); o.connect(dst); go(o, 0, end);
+    }
+    for (let i = 0; i < 30; i++) noise(at(0.35 + 0.35 * r()), 0.01, node('highpass', 3000), 0.2 + 0.15 * r()); // crackle
+    osc('sine', 48, 20, at(0.9), 1.2, 0.8); noise(at(0.9), 0.6, node('lowpass', 150), 0.5); // sub-bass thump
+  }
+
   // Effect registry. draw(ctx, frame, progress, anchor, state):
   //   frame = { w, h, video, tmp, now }; progress 0→1 over the hold (runs backwards while CANCELLING, 1 while LEAVING);
   //   anchor = smoothed primary anchor {x,y} in normalized output coords (detector frames are a downscale of the same,
@@ -1067,6 +1156,7 @@ void main() {
     BANKAI: { id: 'BANKAI', label: 'Bankai (sword)', needsMask: true, needsBackgroundPlate: false, defaultAnchor: { x: 0.5, y: 0.6 }, draw: fxBankai, sound: soundBankai },
     KAMUI: { id: 'KAMUI', label: 'Kamui (vortex)', needsMask: false, needsBackgroundPlate: false, defaultAnchor: { x: 0.45, y: 0.35 }, draw: fxKamui, sound: soundKamui },
     HOLLOW_RED: { id: 'HOLLOW_RED', label: 'Red (fused orbs)', needsMask: false, needsBackgroundPlate: false, defaultAnchor: { x: 0.5, y: 0.5 }, draw: fxRed, sound: soundRed },
+    HOLLOW_PURPLE: { id: 'HOLLOW_PURPLE', label: 'Purple (black hole)', needsMask: false, needsBackgroundPlate: false, armSteady: 0.05, defaultAnchor: { x: 0.5, y: 0.45 }, draw: fxPurple, sound: soundPurple },
   };
 
   function renderFx(ctx, w, h, video, tmp, now) {
