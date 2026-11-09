@@ -702,7 +702,7 @@
   // BANKAI timeline (p 0→1 over the hold; reversed on cancel):
   //  charge 0–0.40   dark red/black flame aura rises from the silhouette edge, background darkens + desaturates,
   //                  debris starts lifting from the bottom, faint camera shake
-  //  build  0.40–0.85 aura taller/brighter, shake grows; at 0.60 a column of black-red light erupts from the hands upward
+  //  build  0.40–0.85 aura taller/brighter, shake grows; at 0.60 a black-red blade of light shoots horizontally out of the fist
   //  climax 0.85–1.0 one bright diagonal slash crosses the frame (q 0–.25), white flash (q .25–.35), the frame splits along
   //                  the slash and the halves slide apart revealing black (q .35–1)
   //  end    p = 1    black frame while Leave is clicked
@@ -740,11 +740,15 @@
     ctx.save(); ctx.globalAlpha = 0.35 + 0.65 * k; ctx.drawImage(bkAura, 0, 0, W, H);
     ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.25 * k; ctx.drawImage(bkAura, 0, 0, W, H); ctx.restore();
   }
-  function bkColPath(ctx, bx, yb, yt, w, now) { // flickering column polygon, 24 rows from base up
-    const L = [], R = [];
-    for (let i = 0; i < 24; i++) { const y = yb + (yt - yb) * i / 23, o = Math.sin(i * 0.9 + now / 60) * w * 0.15; L.push([bx - w / 2 + o, y]); R.push([bx + w / 2 + o, y]); }
-    ctx.beginPath(); L.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); R.reverse().forEach(([x, y]) => ctx.lineTo(x, y)); ctx.closePath();
+  function bkBladePath(ctx, bx, by, dx, len, t, now) { // flickering horizontal blade from the fist, pointed tip, 24 segments
+    const T = [], B = [];
+    for (let i = 0; i <= 24; i++) {
+      const u = i / 24, x = bx + dx * len * u, ht = t / 2 * (u < 0.9 ? 1 : (1 - u) / 0.1) + Math.sin(i * 0.9 + now / 60) * t * 0.08 * (u < 0.9);
+      T.push([x, by - ht]); B.push([x, by + ht]);
+    }
+    ctx.beginPath(); T.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); B.reverse().forEach(([x, y]) => ctx.lineTo(x, y)); ctx.closePath();
   }
+
   function fxBankai(ctx, f, p, a, s) {
     const W = f.w, H = f.h, now = f.now, tc = f.tmp.getContext('2d');
     if (p <= 0) return;
@@ -768,16 +772,19 @@
       ctx.restore();
     }
     ctx.restore();
-    if (p >= 0.6) { // 5 column
-      const cu = ease(seg(p, 0.6, 0.85)), tp = s.anchors?.top || a, bx = tp.x * W, by = tp.y * H, w = W * (0.03 + 0.1 * cu), yt = by * (1 - ease(seg(p, 0.6, 0.68)));
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = `rgba(220,20,20,${0.25 * cu})`; bkColPath(ctx, bx, by, yt, w * 2, now); ctx.fill();
-      ctx.globalCompositeOperation = 'source-over';
-      const g = ctx.createLinearGradient(bx - w / 2, 0, bx + w / 2, 0);
-      g.addColorStop(0, 'rgba(255,40,30,0.95)'); g.addColorStop(0.3, 'rgba(120,0,0,0.95)'); g.addColorStop(0.5, 'rgba(5,0,0,0.98)'); g.addColorStop(0.7, 'rgba(120,0,0,0.95)'); g.addColorStop(1, 'rgba(255,40,30,0.95)');
-      ctx.fillStyle = g; bkColPath(ctx, bx, by, yt, w, now); ctx.fill();
-      ctx.globalCompositeOperation = 'lighter'; glow(ctx, bx, by, w * 1.5, 'rgba(255,60,40,0.8)');
-      ctx.restore();
+    if (p >= 0.6) { // 5 blade: horizontal black-red blade out of the thumb side of the fist, across the frame
+      const cu = ease(seg(p, 0.6, 0.85)), bl = s.anchors?.blade || a, bx = bl.x * W, by = bl.y * H, dx = (s.anchors?.dir?.x ?? 1) < 0 ? -1 : 1;
+      const len = ((dx > 0 ? W - bx : bx) + 0.05 * W) * ease(seg(p, 0.6, 0.68)), t = H * (0.025 + 0.05 * cu);
+      if (len > 1) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = `rgba(220,20,20,${0.25 * cu})`; bkBladePath(ctx, bx, by, dx, len, t * 2.2, now); ctx.fill();
+        ctx.globalCompositeOperation = 'source-over';
+        const g = ctx.createLinearGradient(0, by - t / 2, 0, by + t / 2);
+        g.addColorStop(0, 'rgba(255,40,30,0.95)'); g.addColorStop(0.3, 'rgba(120,0,0,0.95)'); g.addColorStop(0.5, 'rgba(5,0,0,0.98)'); g.addColorStop(0.7, 'rgba(120,0,0,0.95)'); g.addColorStop(1, 'rgba(255,40,30,0.95)');
+        ctx.fillStyle = g; bkBladePath(ctx, bx, by, dx, len, t, now); ctx.fill();
+        ctx.globalCompositeOperation = 'lighter'; glow(ctx, bx, by, t * 1.8, 'rgba(255,60,40,0.8)');
+        ctx.restore();
+      }
     }
     if (p < 0.85) { // 6 shake
       const amp = 0.012 * W * k * k;
@@ -822,7 +829,7 @@
     for (const [e, v] of [[env, 0.5], [se, 0.25]]) { e.gain.setValueAtTime(0, T); e.gain.linearRampToValueAtTime(v, T + at(0.84)); e.gain.exponentialRampToValueAtTime(0.0001, T + end); }
     go(roar, 0, end + 0.05); go(sub, 0, end + 0.05);
     for (let i = 0; i < 45; i++) { const t = at(0.15 + 0.69 * Math.sqrt(r())); noise(t, 0.012, node('highpass', 2500), 0.15 + 0.3 * (t / at(0.84))); } // crackle
-    noise(at(0.6), 1.0, node('lowpass', 600), 0.6); osc('sine', 85, 35, at(0.6), 0.8, 0.45); // column eruption
+    noise(at(0.6), 1.0, node('lowpass', 600), 0.6); osc('sine', 85, 35, at(0.6), 0.8, 0.45); // blade eruption
     const ts = at(0.86);
     for (const f of [1830, 2770, 3910, 5150]) osc('sine', f, f, ts, 0.7, 0.07); // metallic ring
     noise(ts - 0.06, 0.16, node('bandpass', 6000), 0.5, [8000, 1500]); // swoosh

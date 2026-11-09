@@ -10,7 +10,7 @@ Works on **Microsoft Teams web** (`teams.microsoft.com`, `teams.live.com`, `team
 | Index + middle crossed (or pressed together), hand raised | **Domain Expansion**: black void expands from your hand, starfield, everything goes dark |
 | **Room**: one hand palm-down, all five fingers spread and curved down like an upside-down bowl, hand above the bottom quarter of the frame | **Room**: particle ring, cyan dome expands past the frame, frame is sliced into tiles, you get scattered, tiles drift apart into black. Needs captured background |
 | **Shadow Clone**: both hands, index + middle pressed together on each, one pair vertical and the other horizontal forming a "+", crossing near their middles | **Shadow clone**: smoke puffs leave copies of you, the copies multiply, then everyone (you included) bursts into smoke and the room is empty. Needs captured background |
-| **Bankai**: one closed fist raised beside your head, palm at about eye level, normal distance from the camera | **Bankai**: dark red aura rises around you, the room darkens, debris lifts, a black-red light column erupts upward from your fist, then a slash splits the frame apart into black |
+| **Bankai**: one closed fist raised beside your head at about eye level, back of the hand to the camera, normal distance | **Bankai**: dark red aura rises around you, the room darkens, debris lifts, a black-red blade of light shoots horizontally out of your fist, then a slash splits the frame apart into black |
 
 All visuals and sounds are generated in code. No third-party character art, clips, or audio are included.
 
@@ -81,9 +81,9 @@ Gesture thresholds (`TH`, ratios of hand/face size, so scale-invariant):
 | `SC_NEAR` | `3` | Shadow Clone / Gojo: a second hand with its wrist within `SC_NEAR × hand size` counts as a seal attempt and blocks Gojo. In the seal, the partly hidden hand only needs its index up (ring + pinky curled); the other needs the full two-finger pose |
 | `SC_CROSS` | `0.7` | Shadow Clone: finger-segment midpoints closer than `SC_CROSS × mean finger length` |
 | `BK_MAX_EXT` | `1` | Bankai: a "fist" has at most this many of index..pinky extended |
-| `BK_EYE` | `0.1` | Bankai: fist palm centre at most this × face width below the eye line |
+| `BK_EYE` | `0.7` | Bankai: fist palm centre at most this × face width below the eye line |
 | `BK_SIDE` | `0.5` | Bankai: palm centre beside the head, more than this × face width from the nose (not in front of the face) |
-| `BK_EYE_LOOSE` | `0.4` | Bankai hysteresis |
+| `BK_EYE_LOOSE` | `1.0` | Bankai hysteresis |
 | `BK_NOFACE_Y` | `0.35` | Bankai with no face detected: palm centre in the top 35% of the frame |
 | `BK_THUMB_UP` | `0.5` | Bankai: rejects thumbs-up (thumb tip above index MCP by more than this × knuckle width) |
 

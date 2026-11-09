@@ -98,10 +98,11 @@ const TH = {
   SC_AXIS: 0.75,    // SHADOW_CLONE: one pair within ~41° of vertical (|vy|/len > SC_AXIS), the other within ~41° of horizontal
   SC_NEAR: 3,       // SHADOW_CLONE/GOJO: another hand with its wrist within SC_NEAR * hs = seal attempt, so GOJO is blocked
   BK_MAX_EXT: 1,    // BANKAI: a "fist" has at most this many of index..pinky extended (one misread finger tolerated)
-  BK_EYE: 0.1,      // BANKAI: fist palm centre at most BK_EYE * face width below the eye line (fist raised to head height)
+  BK_EYE: 0.7,      // BANKAI: fist palm centre at most BK_EYE * face width below the eye line (fist raised to head height;
+                    //         palm centre includes the wrist so it sits ~0.45 below the eyes with the fist at eye level)
   BK_SIDE: 0.5,     // BANKAI: palm centre beside the head, |dx| from nose > BK_SIDE * face width (not in front of the face:
                     //         rules out adjusting glasses, chin on fist, drinking)
-  BK_EYE_LOOSE: 0.4,// BANKAI hysteresis: palm may drop to this * face width below the eye line
+  BK_EYE_LOOSE: 1.0,// BANKAI hysteresis: palm may drop to this * face width below the eye line
   BK_NOFACE_Y: 0.35,// BANKAI without a detected face: palm centre in the top BK_NOFACE_Y of the frame
   BK_THUMB_UP: 0.5, // BANKAI: reject thumbs-up — thumb tip above index MCP by > BK_THUMB_UP * knuckle width
   SC_CROSS: 0.7,    // SHADOW_CLONE: finger-segment midpoints closer than SC_CROSS * mean finger length (crossing near their middles)
@@ -163,9 +164,10 @@ function bkMetrics(h, F) {
     const fw = d({ x: f[234].x * F.ar, y: f[234].y }, { x: f[454].x * F.ar, y: f[454].y }) || 1e-6;
     dy = (pc.y - (f[33].y + f[263].y) / 2) / fw; side = Math.abs(pc.x - f[1].x) * F.ar / fw;
   }
-  const topY = Math.min(...h.raw.map((l) => l.y)); // column erupts from the top of the fist
+  // blade leaves the thumb side of the fist (index MCP side), horizontally, at the height of the curled fingers
+  const r = h.raw, by = [5, 6, 9, 10, 13, 14, 17, 18].reduce((a, i) => a + r[i].y, 0) / 8;
   return { dy, side, thumbUp: h.lm[4].y < h.lm[5].y - TH.BK_THUMB_UP * kw,
-    hit: { anchor: pc, anchors: { top: { x: pc.x, y: topY } } } };
+    hit: { anchor: pc, anchors: { blade: { x: r[5].x, y: by }, dir: { x: Math.sign(r[5].x - r[17].x) || 1, y: 0 } } } };
 }
 
 // Ordered rule list. Two-hand rules are always evaluated before one-hand rules (sorted below) so a two-hand
