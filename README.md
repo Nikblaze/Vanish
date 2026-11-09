@@ -11,7 +11,7 @@ Works on **Microsoft Teams web** (`teams.microsoft.com`, `teams.live.com`, `team
 | **Room**: one hand palm-down, all five fingers spread and curved down like an upside-down bowl, hand above the bottom quarter of the frame | **Room**: particle ring, cyan dome expands past the frame, frame is sliced into tiles, you get scattered, tiles drift apart into black. Needs captured background |
 | **Shadow Clone**: both hands, index + middle pressed together on each, one pair vertical and the other horizontal forming a "+", crossing near their middles | **Shadow clone**: smoke puffs leave copies of you, the copies multiply, then everyone (you included) bursts into smoke and the room is empty. Needs captured background |
 | **Bankai**: one closed fist raised beside your head at about eye level, back of the hand to the camera, normal distance | **Bankai**: dark red aura rises around you, the room darkens, debris lifts, a black-red blade of light shoots horizontally out of your fist, then a slash splits the frame apart into black |
-| **Kamui**: index, middle and ring fingers laid over one eye | **Kamui**: space twists around your visible eye into a spiral vortex that sucks the whole frame into a point, then black |
+| **Kamui**: index, middle and ring fingers laid over one eye | **Kamui**: a dark spinning vortex opens around your visible eye, the view zooms in as it spirals faster, then a black core swallows the frame |
 
 All visuals and sounds are generated in code. No third-party character art, clips, or audio are included.
 

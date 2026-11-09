@@ -837,21 +837,35 @@
   }
 
   // KAMUI timeline (p 0→1 over the hold; reversed on cancel):
-  //  charge 0–0.40   a slow twist starts around the visible eye (small swirl radius), faint dark spiral arms appear
-  //  build  0.40–0.85 swirl radius grows to the whole frame, twist strengthens, slight inward pull, edges darken
-  //  climax 0.85–1.0 everything is sucked into a point at the eye (scale → ~0), spinning faster, brief pinpoint flash
+  //  charge 0–0.40   a spinning twist opens around the visible eye, dark spiral bands fade in and flow with the spin
+  //  build  0.40–0.85 vortex spreads over the whole frame, spins faster with motion blur, the view zooms toward the eye,
+  //                  purple-dark tint inside, edges darken, a small black core with a faint rim forms at the eye
+  //  climax 0.85–1.0 the black core grows and swallows the frame while the twist and blur peak
   //  end    p = 1    black frame while Leave is clicked
   // Warp = WebGL fragment shader on the already-drawn main canvas (kmGL, lazy, permanently off on any failure → 2D stepped swirl).
+  // Vortex shader: continuous spin (ph accumulates over time), twist stronger toward the centre, inward pull + zoom,
+  // tangential motion blur (5 taps), dark log-spiral bands flowing with the spin, purple-dark tint, vignette,
+  // and a black core with a faint glowing rim that grows until it swallows the frame.
   const KM_FS = `precision mediump float;
-uniform sampler2D t; uniform vec2 res, c; uniform float ang, rad, s, dark;
-void main() {
-  vec2 p = gl_FragCoord.xy - c; float r = length(p);
-  float f = clamp(1.0 - r / rad, 0.0, 1.0); float a = ang * f * f;
+uniform sampler2D t; uniform vec2 res, c; uniform float ang, rad, s, dark, ph, vort, core, blur;
+vec3 smp(vec2 p, float a, float k) {
   float cs = cos(a), sn = sin(a);
-  vec2 q = vec2(cs * p.x - sn * p.y, sn * p.x + cs * p.y) / s;
-  vec2 uv = (q + c) / res;
-  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
-  vec3 col = texture2D(t, uv).rgb * (1.0 - dark * smoothstep(0.15, 1.0, r / length(res)));
+  vec2 uv = (vec2(cs * p.x - sn * p.y, sn * p.x + cs * p.y) * k + c) / res;
+  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return vec3(0.0);
+  return texture2D(t, uv).rgb;
+}
+void main() {
+  vec2 p = gl_FragCoord.xy - c; float r = length(p) + 0.001;
+  float f = clamp(1.0 - r / rad, 0.0, 1.0), f2 = f * f;
+  float a = (ang + ph) * f2, k = (1.0 + 1.2 * vort * f2) / s, b = blur * f;
+  vec3 col = (2.0 * smp(p, a, k) + smp(p, a - b, k) + smp(p, a + b, k) + smp(p, a - 2.0 * b, k * 1.01) + smp(p, a + 2.0 * b, k * 0.99)) / 6.0;
+  float sp = sin(3.0 * atan(p.y, p.x) + 7.0 * log(r) + ph * 3.0);
+  col *= 1.0 - 0.6 * vort * smoothstep(0.2, 1.0, sp) * smoothstep(0.0, 0.25, f);
+  col = mix(col, col * vec3(0.55, 0.45, 0.7), 0.5 * vort * f);
+  col *= 1.0 - dark * smoothstep(0.15, 1.0, r / length(res));
+  col *= smoothstep(core, core * 1.6 + 2.0, r);
+  float rd = (r - core * 1.3) / (core * 0.25 + 3.0), rim = exp(-rd * rd); // (pow() is undefined for negative bases)
+  col += vec3(0.35, 0.25, 0.5) * rim * vort * 0.6;
   gl_FragColor = vec4(col, 1.0);
 }`;
   let kmGL; // undefined = not tried, false = off for good, object = ready
@@ -870,10 +884,10 @@ void main() {
     const al = gl.getAttribLocation(prog, 'a'); gl.enableVertexAttribArray(al); gl.vertexAttribPointer(al, 2, gl.FLOAT, false, 0, 0);
     const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
     for (const [k, v] of [[gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE], [gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
-    const u = {}; for (const n of ['res', 'c', 'ang', 'rad', 's', 'dark']) u[n] = gl.getUniformLocation(prog, n);
+    const u = {}; for (const n of ['res', 'c', 'ang', 'rad', 's', 'dark', 'ph', 'vort', 'core', 'blur']) u[n] = gl.getUniformLocation(prog, n);
     return { cv, gl, prog, tex, u };
   }
-  function kmWarp(ctx, W, H, C, ang, rad, sc, dark) { // true if the GL warp was drawn
+  function kmWarp(ctx, W, H, C, k) { // true if the GL warp was drawn
     if (kmGL === false) return false;
     try {
       if (kmGL === undefined) kmGL = kmInit();
@@ -885,51 +899,44 @@ void main() {
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, ctx.canvas);
       gl.uniform2f(u.res, W, H); gl.uniform2f(u.c, C.x, H - C.y);
-      gl.uniform1f(u.ang, ang); gl.uniform1f(u.rad, rad); gl.uniform1f(u.s, sc); gl.uniform1f(u.dark, dark);
+      for (const n of ['ang', 'rad', 's', 'dark', 'ph', 'vort', 'core', 'blur']) gl.uniform1f(u[n], k[n]);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
       ctx.drawImage(cv, 0, 0, W, H);
       return true;
     } catch (e) { kmGL = false; log('kamui webgl off', String(e)); return false; }
   }
   function fxKamui(ctx, f, p, a, s) {
-    const W = f.w, H = f.h, now = f.now, diag = Math.hypot(W, H);
+    const W = f.w, H = f.h, now = f.now, diag = Math.hypot(W, H), m = s.mem;
     if (p <= 0) return;
     if (p >= 1) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); return; }
     const C = { x: a.x * W, y: a.y * H };
-    const rad = 0.18 * H + (1.2 * diag - 0.18 * H) * ease(seg(p, 0.1, 0.85));
-    const ang = 0.8 * ease(seg(p, 0, 0.4)) + 5 * ease(seg(p, 0.4, 0.85)) + 10 * ease(seg(p, 0.85, 1));
-    const sc = Math.max(0.02, 1 - 0.3 * ease(seg(p, 0.4, 0.85)) - 0.68 * ease(seg(p, 0.85, 0.98)));
-    const dark = 0.6 * ease(seg(p, 0.4, 1));
-    if (!kmWarp(ctx, W, H, C, ang, rad, sc, dark)) { // 2D fallback: stepped swirl, outer ring first
-      const tc = f.tmp.getContext('2d');
-      tc.globalCompositeOperation = 'source-over'; tc.clearRect(0, 0, W, H); tc.drawImage(ctx.canvas, 0, 0, W, H);
-      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
-      for (let i = 0; i < 8; i++) {
-        const rr = rad * (1 - i / 8), fr = Math.min(1, Math.max(0, 1 - rr / rad));
-        ctx.save(); ctx.beginPath(); ctx.arc(C.x, C.y, i ? rr : Math.max(rad, diag), 0, 6.2832); ctx.clip();
-        ctx.translate(C.x, C.y); ctx.rotate(-ang * fr * fr); ctx.scale(sc, sc); ctx.translate(-C.x, -C.y);
-        ctx.drawImage(f.tmp, 0, 0, W, H); ctx.restore();
-      }
-      const g = ctx.createRadialGradient(C.x, C.y, 0.15 * diag, C.x, C.y, diag);
-      g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, `rgba(0,0,0,${dark})`);
-      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // continuous spin: phase integrates the current spin speed (rad/s), so it keeps turning smoothly forwards and back
+    const spin = 0.8 + 4 * ease(seg(p, 0.2, 1)), dt = m.kt ? Math.min(0.1, Math.max(0, (now - m.kt) / 1000)) : 0;
+    m.kt = now; m.ph = (m.ph || 0) + spin * dt;
+    const vort = ease(seg(p, 0, 0.5)), k = {
+      ph: m.ph, vort,
+      ang: 1.2 * ease(seg(p, 0.1, 0.85)) + 4 * ease(seg(p, 0.85, 1)),
+      rad: 0.25 * H + (1.3 * diag - 0.25 * H) * ease(seg(p, 0, 0.7)),
+      s: 1 + 0.35 * ease(seg(p, 0.25, 0.85)), // natural zoom toward the eye
+      blur: 0.12 * vort + 0.15 * ease(seg(p, 0.85, 1)),
+      dark: 0.75 * ease(seg(p, 0.3, 1)),
+      core: 0.02 * H + 0.05 * H * ease(seg(p, 0.2, 0.85)) + 1.2 * diag * ease(seg(p, 0.85, 1)) ** 2, // swallows the frame
+    };
+    if (kmWarp(ctx, W, H, C, k)) return;
+    // 2D fallback: stepped swirl (8 rotated rings), vignette, black core
+    const tc = f.tmp.getContext('2d'), rot = k.ang + k.ph;
+    tc.globalCompositeOperation = 'source-over'; tc.clearRect(0, 0, W, H); tc.drawImage(ctx.canvas, 0, 0, W, H);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    for (let i = 0; i < 8; i++) {
+      const rr = k.rad * (1 - i / 8), fr = Math.min(1, Math.max(0, 1 - rr / k.rad));
+      ctx.save(); ctx.beginPath(); ctx.arc(C.x, C.y, i ? rr : Math.max(k.rad, diag), 0, 6.2832); ctx.clip();
+      ctx.translate(C.x, C.y); ctx.rotate(-rot * fr * fr); ctx.scale(k.s, k.s); ctx.translate(-C.x, -C.y);
+      ctx.drawImage(f.tmp, 0, 0, W, H); ctx.restore();
     }
-    ctx.save(); // overlay: spiral arms, dark core, pinpoint flash
-    const e = seg(p, 0.05, 0.3) * (1 - seg(p, 0.9, 1)), rMax = Math.min(rad, diag);
-    if (e > 0.003) {
-      ctx.strokeStyle = `rgba(10,0,20,${0.35 * e})`; ctx.lineWidth = 3; ctx.lineCap = 'round';
-      const th1 = Math.log(rMax / 6) / 0.22;
-      for (let k = 0; k < 3; k++) {
-        const ph = now * 0.002 + ang * 0.3 + k * 2.0944;
-        ctx.beginPath();
-        for (let i = 0; i <= 24; i++) { const th = th1 * i / 24, r = 6 * Math.exp(0.22 * th); ctx[i ? 'lineTo' : 'moveTo'](C.x + Math.cos(th + ph) * r, C.y + Math.sin(th + ph) * r); }
-        ctx.stroke();
-      }
-    }
-    glow(ctx, C.x, C.y, 0.04 * H + 0.25 * H * ease(seg(p, 0.5, 1)), 'rgba(0,0,0,0.9)');
-    const fl = Math.sin(Math.PI * seg(p, 0.95, 1));
-    if (fl > 0.003) { ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = fl; glow(ctx, C.x, C.y, 0.05 * H, 'rgba(255,255,255,1)'); }
-    ctx.restore();
+    const g = ctx.createRadialGradient(C.x, C.y, 0.15 * diag, C.x, C.y, diag);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, `rgba(0,0,0,${k.dark})`);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(C.x, C.y, k.core, 0, 6.2832); ctx.fill();
   }
   function soundKamui(b) {
     const { ac, T, out, go, node, gain, osc, noise, holdS } = b, at = (p) => p * holdS, end = at(0.99) + 0.05, r = mkRnd(5);
