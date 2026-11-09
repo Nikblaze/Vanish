@@ -1034,76 +1034,133 @@ void main() {
   }
 
   // HOLLOW_PURPLE timeline (p 0→1 over the hold; reversed on cancel):
-  //  charge 0–0.40   a white-violet spark flares at the fingertips with thin flickering light rays
-  //  build  0.40–0.85 it condenses into a small purple orb with a black core and a spinning accretion ring (0.40–0.65);
-  //                  the black hole grows, pulling radial light streaks and dust inward, lensing the frame at its edge
+  //  charge 0–0.40   energy gathers in the gap between the index and middle fingers: jagged violet lightning from both
+  //                  fingertips into the gap, particles streaming in, a white-violet core brightening, frame tints purple
+  //  build  0.40–0.60 the energy condenses (flash + expanding shockwave ring at 0.45) into a sphere: black core, thin
+  //                  blazing photon ring, swirling plasma filaments; camera shake starts
+  //  build  0.60–0.85 it becomes a black hole: Doppler-bright accretion disk, lensed arc of the far side of the disk
+  //                  bent over the top, lens warp of the frame, light streaks and dust pulled in, shake grows
   //  climax 0.85–1.0 it swallows the whole frame into black
   //  end    p = 1    black screen with a faint purple ring fading out while Leave is clicked
-  const PU_RAYS = (() => { const r = mkRnd(99); return Array.from({ length: 14 }, () => ({ a: r() * 6.283, l: r() })); })();
   const PU_STR = (() => { const r = mkRnd(77); return Array.from({ length: 36 }, () => ({ a: r() * 6.283, ph: r(), sp: 0.7 + r() * 0.6 })); })();
+  const PU_PT = (() => { const r = mkRnd(88); return Array.from({ length: 40 }, () => ({ side: r() < 0.5 ? 0 : 1, ph: r(), sp: 0.7 + r() * 0.6, off: r() * 2 - 1 })); })();
+  const PU_FIL = (() => { const r = mkRnd(55); return Array.from({ length: 7 }, (_, i) => ({ a0: r() * 6.283, r: 1.1 + r() * 0.4, span: 0.6 + r() * 0.8, sp: (0.6 + r() * 0.8) * (i % 3 === 2 ? -1 : 1), lw: 1 + r() * 2 })); })();
   function fxPurple(ctx, f, p, a, s) {
     const W = f.w, H = f.h, now = f.now, diag = Math.hypot(W, H), m = s.mem;
     if (p <= 0) return;
-    const C = { x: a.x * W, y: a.y * H }, disc = (r) => { ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(C.x, C.y, r, 0, 6.2832); ctx.fill(); };
-    const ring = (r, lw, c) => { ctx.strokeStyle = c; ctx.lineWidth = lw; ctx.beginPath(); ctx.arc(C.x, C.y, r, 0, 6.2832); ctx.stroke(); };
+    const O = { x: a.x * W, y: a.y * H }, TAU = 6.2832;
+    const disc = (r) => { ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(O.x, O.y, r, 0, TAU); ctx.fill(); };
+    const ring = (r, lw, c) => { ctx.strokeStyle = c; ctx.lineWidth = lw; ctx.beginPath(); ctx.arc(O.x, O.y, r, 0, TAU); ctx.stroke(); };
     if (p >= 1) {
       ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
       ctx.save(); ctx.globalCompositeOperation = 'lighter';
       ring(0.12 * H, 3, `rgba(170,90,255,${0.5 * Math.max(0, 1 - ((s.t || 0) - LEAVE_MS) / 1500)})`);
       ctx.restore(); return;
     }
-    if (p < 0.5) { // spark + rays
-      const e = ease(seg(p, 0, 0.3)) * (1 - seg(p, 0.4, 0.5));
-      if (e > 0) {
-        ctx.save(); ctx.globalCompositeOperation = 'lighter';
-        glow(ctx, C.x, C.y, 0.06 * H * e * (1 + 0.15 * Math.sin(now / 40)), `rgba(255,255,255,${0.95 * e})`);
-        glow(ctx, C.x, C.y, 0.15 * H * e, `rgba(190,120,255,${0.5 * e})`);
-        ctx.strokeStyle = `rgba(230,210,255,${0.7 * e})`; ctx.lineWidth = 1.5; ctx.beginPath();
-        PU_RAYS.forEach((q, i) => {
-          const L = (0.06 * H + 0.14 * H * q.l * e) * (0.75 + 0.25 * Math.sin(now / 30 + i * 7)), c = Math.cos(q.a), n = Math.sin(q.a);
-          ctx.moveTo(C.x + c * 0.02 * H * e, C.y + n * 0.02 * H * e); ctx.lineTo(C.x + c * L, C.y + n * L);
-        });
-        ctx.stroke(); ctx.restore();
-      }
-    }
-    const o = ease(seg(p, 0.4, 0.65));
-    let rc = 0.02 * H * o;
-    if (p >= 0.55) { // black-hole lens (Kamui shader, bands off, violet rim)
-      const dt = m.pt ? Math.min(0.1, Math.max(0, (now - m.pt) / 1000)) : 0; m.pt = now; m.pp = (m.pp || 0) + 1.5 * dt; // spin 1.5 rad/s
-      const e1 = ease(seg(p, 0.55, 0.85)), e2 = ease(seg(p, 0.85, 1)); rc = 0.02 * H + 0.07 * H * e1 + 1.2 * diag * e2 ** 2;
-      const k = { ph: m.pp, ang: 0.6, vort: 0.6 * e1 + 0.4 * e2, rad: rc * 7 + 0.2 * H, s: 1, blur: 0.04, dark: 0.55 * e2, core: rc, bands: 0, rimc: [0.9, 0.4, 1.6] };
-      if (!kmWarp(ctx, W, H, C, k)) { // no WebGL: black disk + violet ring
-        disc(rc);
-        ctx.save(); ctx.globalCompositeOperation = 'lighter'; ring(rc * 1.3, Math.max(2, rc * 0.25), 'rgba(170,90,255,0.9)'); ctx.restore();
-      }
-    }
-    if (p >= 0.4) {
-      const rx = rc * 2.6 + 0.02 * H * o, ry = rx * 0.32, ra = o * (1 - seg(p, 0.9, 0.95)), spin = now * 0.004;
-      const half = (front) => { // accretion ring half: back = angles π..2π, front = 0..π
-        const a0 = front ? 0 : Math.PI;
-        ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
-        ctx.strokeStyle = `rgba(150,80,255,${0.35 * ra})`; ctx.lineWidth = 8; ctx.beginPath(); ctx.ellipse(C.x, C.y, rx, ry, -0.35, a0, a0 + Math.PI); ctx.stroke();
-        ctx.strokeStyle = `rgba(220,180,255,${0.9 * ra})`; ctx.lineWidth = 3; ctx.stroke();
-        ctx.strokeStyle = `rgba(255,240,255,${0.9 * ra})`; ctx.lineWidth = 2;
-        for (let i = 0; i < 30; i++) {
-          const an = (i * 0.209 + spin) % 6.2832;
-          if ((Math.sin(an) > 0) === front) { ctx.beginPath(); ctx.ellipse(C.x, C.y, rx, ry, -0.35, an, an + 0.1); ctx.stroke(); }
+    const px = (q, dx) => q ? { x: q.x * W, y: q.y * H } : { x: O.x + dx, y: O.y };
+    const I = px(s.anchors?.i, -0.04 * W), Mt = px(s.anchors?.m, 0.04 * W), gap = Math.max(1, Math.hypot(I.x - Mt.x, I.y - Mt.y));
+    const R0 = Math.min(0.06 * H, Math.max(0.02 * H, 0.32 * gap)), e = (x, y) => ease(seg(p, x, y));
+    const gr = e(0, 0.6); // 1 purple grade
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = `rgba(120,60,170,${0.35 * gr})`; ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = `rgba(40,0,60,${0.15 * gr})`; ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+    if (p < 0.6) { // 2 charge: lightning from both fingertips into the gap, streaming particles, core glow
+      const fade = 1 - seg(p, 0.5, 0.6), la = fade * e(0, 0.15);
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      for (const T of [I, Mt]) {
+        const dx = O.x - T.x, dy = O.y - T.y, l = Math.hypot(dx, dy) || 1, nx = -dy / l, ny = dx / l;
+        for (let b = 0; b < 2; b++) {
+          if (Math.random() > 0.6) continue; // crackle
+          ctx.beginPath();
+          for (let k = 0; k <= 8; k++) {
+            const u = k / 8, j = (Math.random() * 2 - 1) * 0.25 * gap * (1 - Math.abs(2 * u - 1));
+            ctx[k ? 'lineTo' : 'moveTo'](T.x + dx * u + nx * j, T.y + dy * u + ny * j);
+          }
+          ctx.strokeStyle = `rgba(170,90,255,${0.35 * la})`; ctx.lineWidth = 3; ctx.stroke();
+          ctx.strokeStyle = `rgba(245,230,255,${0.9 * la})`; ctx.lineWidth = 1.2; ctx.stroke();
         }
-        ctx.restore();
-      };
-      if (rx < diag && ra > 0) half(false);
-      if (rc > 0.5) disc(rc);
-      if (rx < diag && ra > 0) half(true);
+      }
+      for (const q of PU_PT) {
+        const T = q.side ? Mt : I, u = (now * 0.0012 * q.sp + q.ph) % 1, k = u * u, dx = O.x - T.x, dy = O.y - T.y, l = Math.hypot(dx, dy) || 1, w = q.off * gap * 0.3 * (1 - u);
+        ctx.fillStyle = `rgba(220,180,255,${u * fade})`;
+        ctx.fillRect(T.x + dx * k - dy / l * w - 1, T.y + dy * k + dx / l * w - 1, 2, 2);
+      }
+      glow(ctx, O.x, O.y, R0 * (0.6 + 1.6 * e(0.05, 0.4)), `rgba(255,255,255,${0.95 * fade})`);
+      glow(ctx, O.x, O.y, R0 * 4 * e(0, 0.4) + 0.01, `rgba(170,80,255,${0.45 * fade})`);
+      ctx.restore();
     }
-    if (p >= 0.5 && p < 0.95) { // inward streaks + dust
-      const it = seg(p, 0.5, 0.6) * (1 - seg(p, 0.9, 0.95));
+    if (p >= 0.43 && p < 0.6) { // 3 condense flash + shockwave
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const fl = Math.sin(Math.PI * seg(p, 0.43, 0.5));
+      if (fl > 0) glow(ctx, O.x, O.y, 0.3 * H, `rgba(255,235,255,${0.9 * fl})`);
+      const q = seg(p, 0.45, 0.6);
+      if (q > 0) {
+        const r = 0.8 * diag * ease(q), c = `rgba(210,170,255,${0.7 * (1 - q)})`, lw = 6 * (1 - q) + 1;
+        ring(r, lw, c); ring(r * 0.85, lw * 0.5, c);
+      }
+      ctx.restore();
+    }
+    let rc = 0;
+    if (p >= 0.45) { // 4 sphere → black hole
+      if (p < 0.6) { rc = R0 * e(0.45, 0.6); disc(rc); } // 2D until the lens takes over
+      else {
+        const dt = m.pt ? Math.min(0.1, Math.max(0, (now - m.pt) / 1000)) : 0; m.pt = now; m.pp = (m.pp || 0) + 1.5 * dt; // spin 1.5 rad/s
+        rc = R0 + 0.06 * H * e(0.6, 0.85) + 1.2 * diag * e(0.85, 1) ** 2;
+        const k = { ph: m.pp, ang: 0.6, vort: 0.6 * e(0.6, 0.85) + 0.4 * e(0.85, 1), rad: rc * 7 + 0.2 * H, s: 1, blur: 0.04, dark: 0.55 * e(0.85, 1), core: rc, bands: 0, rimc: [0.9, 0.4, 1.6] };
+        if (!kmWarp(ctx, W, H, O, k)) disc(rc);
+      }
+      const a3 = e(0.58, 0.7) * (1 - seg(p, 0.9, 0.95)), rx = rc * 3.2, ry = rx * 0.28;
+      if (a3 > 0 && rx < diag && rc > 0.5) { // accretion disk: Doppler-beamed annulus, back half, core, front half
+        const rxi = rc * 1.5, ryi = rxi * 0.28, rot = -0.25;
+        const g = ctx.createConicGradient ? ctx.createConicGradient(now * 0.002, 0, 0) : ctx.createLinearGradient(-rx, 0, rx, 0);
+        for (const [o, c] of [[0, 'rgba(255,240,255,0.95)'], [0.25, 'rgba(190,120,255,0.8)'], [0.5, 'rgba(80,20,140,0.5)'], [0.75, 'rgba(190,120,255,0.8)'], [1, 'rgba(255,240,255,0.95)']]) g.addColorStop(o, c);
+        const half = (front) => {
+          ctx.save(); ctx.translate(O.x, O.y); ctx.rotate(rot);
+          ctx.beginPath(); ctx.rect(-rx - 2, front ? 0 : -ry - 2, 2 * rx + 4, ry + 2); ctx.clip(); // below / above the major axis
+          ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, TAU); ctx.moveTo(rxi, 0); ctx.ellipse(0, 0, rxi, ryi, 0, 0, TAU);
+          ctx.globalAlpha = a3; ctx.fillStyle = g; ctx.fill('evenodd'); ctx.restore();
+        };
+        half(false); disc(rc); half(true);
+      }
+      if (a3 > 0 && rc * 1.42 < diag && rc > 0.5) { // lensed arc: far side of the disk bent over the top (and faintly under)
+        ctx.save(); ctx.globalCompositeOperation = 'lighter';
+        const g = ctx.createLinearGradient(O.x - rc * 1.35, 0, O.x + rc * 1.35, 0);
+        g.addColorStop(0, 'rgba(255,240,255,1)'); g.addColorStop(0.5, 'rgba(110,40,190,1)'); g.addColorStop(1, 'rgba(255,240,255,1)');
+        ctx.strokeStyle = g;
+        ctx.globalAlpha = 0.8 * a3; ctx.lineWidth = rc * 0.35; ctx.beginPath(); ctx.ellipse(O.x, O.y, rc * 1.35, rc * 1.25, 0, Math.PI, TAU); ctx.stroke();
+        ctx.globalAlpha = 0.35 * a3; ctx.lineWidth = rc * 0.15; ctx.beginPath(); ctx.ellipse(O.x, O.y, rc * 1.35, rc * 1.25, 0, 0, Math.PI); ctx.stroke();
+        ctx.restore();
+      }
+      const al = e(0.45, 0.55) * (1 - seg(p, 0.92, 0.97)); // photon ring
+      if (al > 0 && rc > 0.5 && rc * 1.3 < diag) {
+        ctx.save(); ctx.globalCompositeOperation = 'lighter';
+        ring(rc * 1.04, Math.max(1.5, rc * 0.06), `rgba(255,245,255,${0.95 * al})`); ring(rc * 1.04, rc * 0.25, `rgba(170,90,255,${0.35 * al})`);
+        ctx.restore();
+      }
+      const a2 = e(0.45, 0.5) * (1 - seg(p, 0.65, 0.75)); // plasma filaments
+      if (a2 > 0 && p < 0.75 && rc > 0.5) {
+        ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.strokeStyle = `rgba(230,200,255,${0.7 * a2})`;
+        for (const q of PU_FIL) { const an = q.a0 + now * 0.003 * q.sp; ctx.lineWidth = q.lw; ctx.beginPath(); ctx.arc(O.x, O.y, rc * q.r, an, an + q.span); ctx.stroke(); }
+        ctx.restore();
+      }
+    }
+    if (p >= 0.6 && p < 0.95) { // inward streaks + dust
+      const it = seg(p, 0.6, 0.7) * (1 - seg(p, 0.9, 0.95));
       ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineWidth = 1.5;
       for (const q of PU_STR) {
         const u = (now * 0.0007 * q.sp + q.ph) % 1, r1 = rc * 1.4 + 0.6 * diag * (1 - u) ** 2, r0 = r1 + 0.04 * H * (1 - u), an = q.a + 0.6 * u, c = Math.cos(an), n = Math.sin(an), al = 0.6 * u * it;
-        ctx.strokeStyle = `rgba(200,160,255,${al})`; ctx.beginPath(); ctx.moveTo(C.x + c * r0, C.y + n * r0); ctx.lineTo(C.x + c * r1, C.y + n * r1); ctx.stroke();
-        ctx.fillStyle = `rgba(200,160,255,${al})`; ctx.fillRect(C.x + c * r1 - 1, C.y + n * r1 - 1, 2, 2);
+        ctx.strokeStyle = `rgba(200,160,255,${al})`; ctx.beginPath(); ctx.moveTo(O.x + c * r0, O.y + n * r0); ctx.lineTo(O.x + c * r1, O.y + n * r1); ctx.stroke();
+        ctx.fillStyle = `rgba(200,160,255,${al})`; ctx.fillRect(O.x + c * r1 - 1, O.y + n * r1 - 1, 2, 2);
       }
       ctx.restore();
+    }
+    if (p >= 0.45 && p < 0.85) { // 5 shake (last)
+      const amp = 0.012 * W * e(0.45, 0.85);
+      if (amp >= 0.5) {
+        const dx = amp * (Math.sin(now * 0.091) + Math.sin(now * 0.137)) / 2, dy = amp * (Math.sin(now * 0.113) + Math.sin(now * 0.071)) / 2, sc = 1 + 2.5 * amp / W;
+        ctx.save(); ctx.translate(W / 2 + dx, H / 2 + dy); ctx.scale(sc, sc); ctx.translate(-W / 2, -H / 2); ctx.drawImage(ctx.canvas, 0, 0, W, H); ctx.restore();
+      }
     }
   }
   function soundPurple(b) {
@@ -1114,7 +1171,8 @@ void main() {
     for (const [type, dst] of [['sine', hg], ['sawtooth', lp]]) {
       const o = ac.createOscillator(); o.type = type; o.frequency.setValueAtTime(55, T); o.frequency.exponentialRampToValueAtTime(110, T + at(0.85)); o.connect(dst); go(o, 0, end);
     }
-    for (let i = 0; i < 30; i++) noise(at(0.35 + 0.35 * r()), 0.01, node('highpass', 3000), 0.2 + 0.15 * r()); // crackle
+    for (let i = 0; i < 40; i++) noise(at(0.05 + 0.4 * r()), 0.01, node('highpass', 3000), 0.2 + 0.15 * r()); // crackle with the lightning
+    { const t = at(0.45); osc('sine', 95, 32, t, 0.7, 0.6); noise(t, 0.35, node('lowpass', 500), 0.45); osc('square', 1800, 400, t, 0.12, 0.05); } // condense impact
     osc('sine', 48, 20, at(0.9), 1.2, 0.8); noise(at(0.9), 0.6, node('lowpass', 150), 0.5); // sub-bass thump
   }
 

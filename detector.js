@@ -113,7 +113,8 @@ const TH = {
   FWD_Z: 0.25,       // ...and tip closer to the camera than its MCP by FWD_Z * hs (MediaPipe z: smaller = closer)
   FWD_SHORT: 0.55,   // ...or 2D tip–MCP length < FWD_SHORT * hs (foreshortened but straight)
   HP_THUMB: 0.7,  // HOLLOW_PURPLE: thumb out to the side — d(tip4, idxMCP5) > HP_THUMB * hs (GOJO's thumb is tucked; GOJO never checks it)
-  HP_TOG: 1.2,    // HOLLOW_PURPLE: index+middle together — d(tip8, tip12) < HP_TOG * palm (palm = d(lm5, lm9))
+  HP_SPREAD: 1.3, // HOLLOW_PURPLE: index/middle tips spread in a V — d(tip8, tip12) > HP_SPREAD * palm. GOJO "together" is
+                  //  < GOJO_TOGETHER (0.9) * palm, so 0.9–1.3 is a dead zone where neither fires.
   SC_CROSS: 0.7,    // SHADOW_CLONE: finger-segment midpoints closer than SC_CROSS * mean finger length (crossing near their middles)
 };
 
@@ -212,6 +213,12 @@ function kmMetrics(h, F) {
   return { n3, dCov: Math.min(dA, dB), vis: aCov ? eB : eA, cov: aCov ? eA : eB, fw };
 }
 
+// HOLLOW_PURPLE anchor: the gap between the fingers. v = V vertex (knuckle mid), t = tip mid; orb sits 65% of the way up.
+function hpHit(h) {
+  const r = h.raw, v = { x: (r[5].x + r[9].x) / 2, y: (r[5].y + r[9].y) / 2 }, t = { x: (r[8].x + r[12].x) / 2, y: (r[8].y + r[12].y) / 2 };
+  return { anchor: { x: v.x + 0.65 * (t.x - v.x), y: v.y + 0.65 * (t.y - v.y) }, anchors: { i: { x: r[8].x, y: r[8].y }, m: { x: r[12].x, y: r[12].y } } };
+}
+
 // Ordered rule list. Two-hand rules are always evaluated before one-hand rules (sorted below) so a two-hand
 // pose is never read as a one-hand one. match() returns null or { anchor, anchors? } (normalized frame coords).
 // loose() is the hysteresis test used once the gesture is ACTIVE (a looser version of the pose); same return shape.
@@ -241,14 +248,16 @@ const RULES = [
   { id: 'INSTANT_TRANSMISSION', hands: 1,
     match(h, F) { if (!h.twoUp) return null; const fz = F.forehead(); if (!fz) return null; const R = fz.r * TH.IT_TIP_R; return d(h.lm[8], fz.c) < R && d(h.lm[12], fz.c) < R ? { anchor: tipMid(h) } : null; },
     loose: (h) => h.twoUp ? { anchor: tipMid(h) } : null },
-  // same index+middle pose as GOJO; the thumb is the differentiator, so this must be checked before GOJO
+  // V sign (index + middle spread). The V spread plus uncrossed finger order separates it from GOJO (together or crossed);
+  // the thumb out to the side separates it from a plain peace sign (thumb tucked over ring/pinky).
   { id: 'HOLLOW_PURPLE', hands: 1,
-    match(h, F) { const fx = fwdExt(h), lm = h.lm, thumb = d(lm[4], lm[5]) / h.hs, tog = d(lm[8], lm[12]) / h.palm, low = palmMid(h).y > 1 - TH.LOW_ZONE, tm = tipMid(h);
-      if (fx.i && fx.m) F.zones.push({ x: tm.x, y: tm.y, r: 0.5 * h.hs, label: `HP i m r p ${+fx.i}${+fx.m}${+fx.r}${+fx.p} th ${thumb.toFixed(2)} tog ${tog.toFixed(2)}` });
-      if (!(fx.i && fx.m && !fx.r && !fx.p && thumb > TH.HP_THUMB && tog < TH.HP_TOG && !low)) return null;
+    match(h, F) { const fx = fwdExt(h), lm = h.lm, thumb = d(lm[4], lm[5]) / h.hs, spread = d(lm[8], lm[12]) / h.palm, low = palmMid(h).y > 1 - TH.LOW_ZONE, tm = tipMid(h);
+      const notCrossed = Math.sign(lm[8].x - lm[12].x) === Math.sign(lm[5].x - lm[9].x);
+      if (fx.i && fx.m) F.zones.push({ x: tm.x, y: tm.y, r: 0.5 * h.hs, label: `HP i m r p ${+fx.i}${+fx.m}${+fx.r}${+fx.p} th ${thumb.toFixed(2)} sp ${spread.toFixed(2)}` });
+      if (!(fx.i && fx.m && !fx.r && !fx.p && thumb > TH.HP_THUMB && spread > TH.HP_SPREAD && notCrossed && !low)) return null;
       const fz = F.forehead(), R = fz && fz.r * TH.IT_TIP_R; // tips on the forehead = INSTANT_TRANSMISSION
-      return fz && d(lm[8], fz.c) < R && d(lm[12], fz.c) < R ? null : { anchor: tm }; },
-    loose(h) { const fx = fwdExt(h); return fx.i && fx.m && palmMid(h).y <= 1 - TH.LOW_ZONE ? { anchor: tipMid(h) } : null; } },
+      return fz && d(lm[8], fz.c) < R && d(lm[12], fz.c) < R ? null : hpHit(h); },
+    loose(h) { const fx = fwdExt(h); return fx.i && fx.m && palmMid(h).y <= 1 - TH.LOW_ZONE ? hpHit(h) : null; } },
   { id: 'GOJO', hands: 1,
     // a second hand close by = a (maybe partly hidden) SHADOW_CLONE seal, never one-hand GOJO
     match(h, F) { if (!h.twoUp || F.hands.some((x) => x !== h && d(x.lm[0], h.lm[0]) < TH.SC_NEAR * h.hs)) return null; const lm = h.lm, t = d(lm[8], lm[12]);
