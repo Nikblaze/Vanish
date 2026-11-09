@@ -14,12 +14,12 @@
   let firstResult = true;
   let sent = 0, det = 'no iframe', ticks = 0, lastAsk = 0, oc = null;
   const log = (...a) => console.log('[TLFX]', ...a);
-  const IT = 'INSTANT_TRANSMISSION', GOJO = 'GOJO';
   const dbgOn = () => window.__tlfxDebug === true;
 
   // ---------- shared state machine (one, global; every stream's draw loop renders from it) ----------
-  const S = { st: 'IDLE', kind: null, t0: 0, lastHold: 0, t1: 0, leaveAt: 0, a0: 0, test: false,
-    cand: null, candStart: 0, candLast: 0, tip: { x: 0.5, y: 0.4 }, cx: 0.5, capAt: 0, stepT: 0 };
+  const S = { st: 'IDLE', kind: null, t0: 0, lastHold: 0, t1: 0, leaveAt: 0, test: false,
+    cand: null, candStart: 0, candLast: 0, tip: { x: 0.5, y: 0.4 }, cx: 0.5, capAt: 0, stepT: 0,
+    tc: 0, pc: 0, raw: null, rawAt: 0, sm: null, smId: null };
   let lastRecv = 0, haveMask = false, plateImg = null;
   const maskCv = document.createElement('canvas'), maskHard = document.createElement('canvas');
   try {
@@ -28,6 +28,11 @@
   } catch {}
 
   const LEAVE_MS = 5000; // hold time from activation to auto-leave
+  const ARM_MS = 700, GAP_MS = 1000, CANCEL_MS = 600, TEST_MS = 4000; // gesture held to arm; no-hold gap before cancel; reverse-anim length; preview length
+  const ANCHOR_EMA = 0.5; // weight of the newest detector anchor; detector runs ~10 fps at 320 px, EMA removes landmark jitter
+  const offSet = new Set(); // disabled gesture ids, persisted in localStorage 'tlfx-off'
+  try { const a = JSON.parse(localStorage.getItem('tlfx-off')); if (Array.isArray(a)) for (const x of a) if (typeof x === 'string') offSet.add(x); } catch {}
+  const saveOff = () => { try { localStorage.setItem('tlfx-off', JSON.stringify([...offSet])); } catch {} };
   const errSeen = {};
   let firstPatchAt = 0;
   // ---------- debug pill ----------
@@ -48,6 +53,18 @@
       btn.style.cssText = 'display:block;margin-top:4px;pointer-events:auto;cursor:pointer';
       btn.onclick = () => { S.capAt = performance.now() + 3000; };
       body.append(document.createElement('div'), btn);
+      const gh = document.createElement('div'); gh.textContent = 'Gestures'; gh.style.marginTop = '6px'; body.append(gh);
+      for (const fx of Object.values(FX)) {
+        const lb = document.createElement('label'), cb = document.createElement('input');
+        lb.style.cssText = 'display:block;pointer-events:auto;cursor:pointer';
+        cb.type = 'checkbox'; cb.checked = !offSet.has(fx.id); cb.style.pointerEvents = 'auto';
+        cb.onchange = () => {
+          if (cb.checked) offSet.delete(fx.id); else { offSet.add(fx.id); if (S.cand === fx.id) S.cand = null; }
+          saveOff(); updateDebug();
+        };
+        lb.append(cb, document.createTextNode(' ' + fx.label + (fx.needsBackgroundPlate ? ' (uses bg)' : '')));
+        body.append(lb);
+      }
       dbg.append(body, pill);
       document.body.appendChild(dbg);
     }
@@ -57,10 +74,10 @@
     pill.textContent = 'TLFX ';
     const dot = document.createElement('span'); dot.textContent = '●'; dot.style.color = col; pill.append(dot);
     body.style.display = open ? 'block' : 'none';
-    body.firstChild.textContent = `${label()} | ${S.st}\npatched: ${patched} | detector: ${det} | ticks: ${ticks} | sent: ${sent} | live: ${live.size}\nbg: ${plateImg ? 'saved' : 'none'}` + (sendErr ? `\nsend error: ${sendErr}` : '') + (last?.error ? `\nerror: ${last.error}` : '');
+    body.firstChild.textContent = `${label()}\npatched: ${patched} | detector: ${det} | ticks: ${ticks} | sent: ${sent} | live: ${live.size}\nbg: ${plateImg ? 'saved' : 'none'}` + (sendErr ? `\nsend error: ${sendErr}` : '') + (last?.error ? `\nerror: ${last.error}` : '');
   }
   function label() {
-    return `TLFX: ${last?.gesture ?? 'waiting'} | fps ${last?.fps ?? 0}`;
+    return `TLFX: ${last?.gesture ?? 'waiting'}${last?.confidence != null ? ' ' + last.confidence.toFixed(2) : ''} | ${S.st}${S.cand ? ' cand ' + S.cand : ''}${S.kind ? ' fx ' + S.kind : ''} | fps ${last?.fps ?? 0}`;
   }
 
   // ---------- leave ----------
@@ -109,23 +126,7 @@
         if (sweep) { filt.Q.value = 3; filt.frequency.setValueAtTime(sweep[0], T + t); filt.frequency.exponentialRampToValueAtTime(sweep[1], T + t + dur); }
         go(s, t, dur);
       };
-      if (kind === IT) {
-        osc('sine', 400, 1200, 0, 0.6, 0.15, 25);                    // charge, slight vibrato
-        noise(0.6, 0.5, node('bandpass', 500), 0.5, [500, 6000]);    // whoosh
-        osc('square', 1800, 1800, 1.2, 0.08, 0.2);                   // zip/ping
-        osc('triangle', 2600, 2600, 1.28, 0.08, 0.2);
-      } else {
-        noise(0, 0.4, node('lowpass', 800), 0.7);                    // impact
-        osc('sine', 220, 110, 0, 0.6, 0.5);
-        const life = LEAVE_MS / 1000 + 2, lp = node('lowpass', 900), dr = gain(0.12);
-        lp.connect(dr); // void drone, stopped by stopSound(); auto-stops as safety
-        for (const [f, det] of [[110, 0], [165, 4]]) { const o = ac.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.detune.value = det; o.connect(lp); go(o, 0, life); }
-        for (const f of [880, 1320]) { // shimmer: sine under 0.3 Hz tremolo (gain 0..0.06)
-          const o = ac.createOscillator(), tg = gain(0.03), l = ac.createOscillator();
-          o.frequency.value = f; o.connect(tg); l.frequency.value = 0.3; l.connect(gain(0.03, tg.gain));
-          go(o, 0, life); go(l, 0, life);
-        }
-      }
+      FX[kind].sound({ ac, T, out: g, go, node, gain, osc, noise, holdS: (S.test ? TEST_MS : LEAVE_MS) / 1000 }, 0);
     } catch (e) { log('sound failed', String(e)); }
   }
   function stopSound() {
@@ -155,10 +156,10 @@
       document.body.appendChild(r);
     }
     const act = S.st === 'ACTIVE' || S.st === 'LEAVING';
-    ov.bg.style.opacity = act && S.kind === GOJO ? 1 : 0;
+    ov.bg.style.opacity = act && FX[S.kind]?.localVoid ? 1 : 0;
     ov.cnt.style.display = ov.bar.style.display = act ? 'block' : 'none';
     if (act) {
-      const tot = S.test ? 4000 : LEAVE_MS, rem = Math.max(0, Math.ceil((tot - (now - S.t0)) / 1000));
+      const tot = S.test ? TEST_MS : LEAVE_MS, rem = Math.max(0, Math.ceil((tot - (now - S.t0)) / 1000));
       const txt = (S.test ? 'Preview ' : 'Leaving in ') + rem;
       if (ov.cnt.textContent !== txt) ov.cnt.textContent = txt;
       ov.fill.style.width = Math.min(100, ((now - S.t0) / tot) * 100) + '%';
@@ -183,33 +184,44 @@
   function setSt(st) { S.st = st; updateDebug(); }
   function activate(kind, now, test) {
     Object.assign(S, { kind, t0: now, lastHold: now, test, cand: null });
-    S.tip = (last?.tip && now - lastRecv < 600 && last.tip) || (kind === IT ? { x: 0.5, y: 0.4 } : { x: 0.5, y: 0.5 });
+    S.tip = { ...((S.raw && now - S.rawAt < 600 && S.raw) || FX[kind].defaultAnchor) };
     setSt('ACTIVE');
     sound(kind);
     overlay(now);
-    if (kind === IT && ov) ov.flash.animate([{ opacity: 0.8 }, { opacity: 0 }], 350);
+    if (FX[kind].flashOnStart && ov) ov.flash.animate([{ opacity: 0.8 }, { opacity: 0 }], 350);
     log('ACTIVE', kind, test ? '(test)' : '');
   }
   function cancel(now) {
-    const t = now - S.t0;
-    S.a0 = S.kind === IT ? (t >= 600 ? 1 : 0) : ease(Math.min(t / 900, 1));
+    S.tc = now - S.t0; S.pc = progress(now);
     S.t1 = now;
     stopSound();
     setSt('CANCELLING');
   }
   const ease = (x) => 1 - (1 - x) ** 3;
-  function toIdle() { S.gain = 0; setSt('IDLE'); S.kind = null; S.cand = null; haveMask = false; stopSound(); }
+  function toIdle() { S.gain = 0; setSt('IDLE'); S.kind = null; S.cand = null; S.sm = null; S.smId = null; S.raw = null; haveMask = false; stopSound(); }
 
+  const progress = (now) => S.st === 'LEAVING' ? 1 : S.st === 'CANCELLING' ? S.pc * Math.max(0, 1 - (now - S.t1) / CANCEL_MS)
+    : S.st === 'ACTIVE' ? Math.min(1, (now - S.t0) / (S.test ? TEST_MS : LEAVE_MS)) : 0;
+  const anchorFor = (r, id) => r.gesture === id ? { anchor: r.anchor, anchors: r.anchors } : r.loose?.[id] || null;
+  const ema = (o, n) => { for (const k in n) o[k] += (n[k] - o[k]) * ANCHOR_EMA; };
   function onResult(r, now) {
     lastRecv = now;
-    const g = r.gesture;
+    const g = r.gesture, id = S.st === 'IDLE' ? g : S.kind, a = id && FX[id] ? anchorFor(r, id) : null;
+    S.raw = a?.anchor || null; S.rawAt = now;
+    if (a?.anchor) {
+      if (S.smId !== id || !S.sm) { S.sm = { anchor: { ...a.anchor }, anchors: {} }; S.smId = id; for (const k in a.anchors) S.sm.anchors[k] = { ...a.anchors[k] }; }
+      else {
+        ema(S.sm.anchor, a.anchor);
+        for (const k in a.anchors) { const o = S.sm.anchors[k] ||= { ...a.anchors[k] }; ema(o, a.anchors[k]); }
+      }
+    }
     if (S.st === 'IDLE') {
-      if (g === IT || g === GOJO) {
+      if (FX[g] && !offSet.has(g)) {
         if (S.cand !== g || now - S.candLast > 500) { S.cand = g; S.candStart = now; }
         S.candLast = now;
-        if (now - S.candStart >= 700) activate(g, now, false);
+        if (now - S.candStart >= ARM_MS) activate(g, now, false);
       }
-    } else if (S.st === 'ACTIVE' && !S.test && (g === S.kind || r.twoUp)) S.lastHold = now; // twoUp = hysteresis
+    } else if (S.st === 'ACTIVE' && !S.test && (g === S.kind || r.loose?.[S.kind])) S.lastHold = now; // loose = hysteresis
   }
 
   // driven from every stream's draw loop (guarded so it advances once per frame)
@@ -219,9 +231,9 @@
     if (S.capAt && now >= S.capAt) { S.capAt = 0; capturePlate(); }
     if (S.st === 'IDLE' && S.cand && now - S.candLast > 500) { S.cand = null; updateDebug(); }
     if (S.st === 'ACTIVE') {
-      if (S.test ? now - S.t0 >= 4000 : now - S.lastHold > 1000) cancel(now);
+      if (S.test ? now - S.t0 >= TEST_MS : now - S.lastHold > GAP_MS) cancel(now);
       else if (!S.test && now - S.t0 >= LEAVE_MS) { setSt('LEAVING'); S.leaveAt = now; leaveMeeting(); }
-    } else if (S.st === 'CANCELLING' && now - S.t1 >= 600) toIdle();
+    } else if (S.st === 'CANCELLING' && now - S.t1 >= CANCEL_MS) toIdle();
     else if (S.st === 'LEAVING' && now - S.leaveAt >= 2000) { stopSound(); toIdle(); }
     overlay(now);
   }
@@ -285,9 +297,9 @@
       if (!oc || oc.height !== h) oc = new OffscreenCanvas(w, h);
       oc.getContext('2d').drawImage(v, 0, 0, w, h);
       const bmp = oc.transferToImageBitmap();
-      // mask also while arming IT so the segmenter is loaded by activation
-      const wantMask = (S.kind === IT && S.st !== 'IDLE') || (S.st === 'IDLE' && S.cand === IT);
-      detWin.postMessage({ type: 'tlfx:frame', bmp, t: performance.now(), wantMask, debug: dbgOn() }, detOrigin, [bmp]);
+      // mask also while arming so the segmenter is loaded by activation
+      const k = S.st === 'IDLE' ? S.cand : S.kind, wantMask = !!(k && FX[k]?.needsMask);
+      detWin.postMessage({ type: 'tlfx:frame', bmp, t: performance.now(), wantMask, debug: dbgOn(), off: [...offSet] }, detOrigin, [bmp]);
       sent++;
     } catch (err) {
       busy = false;
@@ -307,19 +319,24 @@
     ctx.textBaseline = 'top';
     ctx.fillText(text, 20, 10 + fs * 0.3);
     if (!last) return;
-    ctx.fillStyle = '#f0f';
-    for (const p of last.hands || []) {
-      ctx.beginPath();
-      ctx.arc(p.x * w, p.y * h, 4, 0, 7);
-      ctx.fill();
+    const g = Object.keys(last.loose || {});
+    if (g.length) { ctx.font = `${Math.round(h / 30)}px monospace`; ctx.fillStyle = '#0f0'; ctx.fillText('loose: ' + g.join(' '), 20, 10 + fs * 1.7); }
+    const BONES = [[0, 1, 2, 3, 4], [0, 5, 6, 7, 8], [5, 9, 10, 11, 12], [9, 13, 14, 15, 16], [13, 17, 18, 19, 20], [0, 17]];
+    (last.hands || []).forEach((hd, i) => {
+      ctx.strokeStyle = ctx.fillStyle = ['#f0f', '#0ff'][i % 2]; ctx.lineWidth = 2;
+      for (const b of BONES) { ctx.beginPath(); b.forEach((j, n) => ctx[n ? 'lineTo' : 'moveTo'](hd[j].x * w, hd[j].y * h)); ctx.stroke(); }
+      for (const p of hd) { ctx.beginPath(); ctx.arc(p.x * w, p.y * h, 4, 0, 7); ctx.fill(); }
+    });
+    ctx.font = `${Math.round(h / 40)}px monospace`; ctx.textBaseline = 'bottom';
+    for (const z of last.zones || []) {
+      ctx.strokeStyle = ctx.fillStyle = '#ff0'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(z.x * w, z.y * h, z.r * h, 0, 7); ctx.stroke();
+      if (z.label) ctx.fillText(z.label, z.x * w, z.y * h - z.r * h);
     }
-    const f = last.forehead;
-    if (f) {
-      ctx.strokeStyle = '#ff0';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(f.x * w, f.y * h, f.r * w, 0, 7);
-      ctx.stroke();
+    ctx.textBaseline = 'top';
+    if (S.st !== 'IDLE' && S.sm) {
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(S.sm.anchor.x * w, S.sm.anchor.y * h, 8, 0, 7); ctx.stroke();
     }
   }
 
@@ -343,7 +360,7 @@
   // e = {kind, t (ms since activation) | null, te (ms since cancel) | null, a0}
   function fxIT(ctx, w, h, video, tmp, e, now) {
     const t = e.t, tc = tmp.getContext('2d');
-    const tip = e.t != null && last?.tip && now - lastRecv < 600 ? last.tip : S.tip;
+    const tip = (e.t != null && e.raw) || S.tip;
     let v = 0, flick = false;
     if (t != null) { if (t >= 1200) v = 1; else if (t >= 600) { flick = true; v = Math.floor(t / 70) % 2; } }
     else if (e.a0) { flick = true; v = Math.floor(e.te / 70) % 2 && e.te < 540 ? 1 : 0; }
@@ -437,12 +454,49 @@
     }
   }
 
+  // Effect registry. draw(ctx, frame, progress, anchor, state):
+  //   frame = { w, h, video, tmp, now }; progress 0→1 over the hold (runs backwards while CANCELLING, 1 while LEAVING);
+  //   anchor = smoothed primary anchor {x,y} in normalized output coords (detector frames are a downscale of the same,
+  //   un-mirrored camera image we draw, so x*w, y*h maps directly; the app mirrors only its local self-view);
+  //   state = { phase, t, te, tc, test, anchors, rawAnchor, startAnchor }.
+  // sound(bus, progress): scheduled once at activation (progress = 0); bus.holdS = seconds until leave.
+  const FX = {
+    INSTANT_TRANSMISSION: { id: 'INSTANT_TRANSMISSION', label: 'Instant Transmission', needsMask: true, needsBackgroundPlate: true,
+      defaultAnchor: { x: 0.5, y: 0.4 }, flashOnStart: true,
+      draw: (ctx, f, p, a, s) => fxIT(ctx, f.w, f.h, f.video, f.tmp, { t: s.t, te: s.te, a0: s.tc >= 600 ? 1 : 0, raw: s.rawAnchor }, f.now),
+      sound(b) {
+        const { osc, noise, node } = b;
+        osc('sine', 400, 1200, 0, 0.6, 0.15, 25);                    // charge, slight vibrato
+        noise(0.6, 0.5, node('bandpass', 500), 0.5, [500, 6000]);    // whoosh
+        osc('square', 1800, 1800, 1.2, 0.08, 0.2);                   // zip/ping
+        osc('triangle', 2600, 2600, 1.28, 0.08, 0.2);
+      } },
+    GOJO: { id: 'GOJO', label: 'Domain Expansion', needsMask: false, needsBackgroundPlate: false,
+      defaultAnchor: { x: 0.5, y: 0.5 }, localVoid: true,
+      draw: (ctx, f, p, a, s) => fxGojo(ctx, f.w, f.h, f.video, { t: s.t, te: s.te, a0: ease(Math.min(s.tc / 900, 1)) }, f.now),
+      sound(b) {
+        const { ac, go, node, gain, osc, noise } = b;
+        noise(0, 0.4, node('lowpass', 800), 0.7);                    // impact
+        osc('sine', 220, 110, 0, 0.6, 0.5);
+        const life = LEAVE_MS / 1000 + 2, lp = node('lowpass', 900), dr = gain(0.12);
+        lp.connect(dr); // void drone, stopped by stopSound(); auto-stops as safety
+        for (const [f, det] of [[110, 0], [165, 4]]) { const o = ac.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.detune.value = det; o.connect(lp); go(o, 0, life); }
+        for (const f of [880, 1320]) { // shimmer: sine under 0.3 Hz tremolo (gain 0..0.06)
+          const o = ac.createOscillator(), tg = gain(0.03), l = ac.createOscillator();
+          o.frequency.value = f; o.connect(tg); l.frequency.value = 0.3; l.connect(gain(0.03, tg.gain));
+          go(o, 0, life); go(l, 0, life);
+        }
+      } },
+  };
+
   function renderFx(ctx, w, h, video, tmp, now) {
-    if (S.st === 'IDLE' || !S.kind) return;
-    const can = S.st === 'CANCELLING';
-    const e = { t: can ? null : now - S.t0, te: can ? now - S.t1 : null, a0: S.a0 };
+    const fx = FX[S.kind];
+    if (S.st === 'IDLE' || !fx) return;
     if (tmp.width !== w || tmp.height !== h) { tmp.width = w; tmp.height = h; }
-    (S.kind === IT ? fxIT : fxGojo)(ctx, w, h, video, ...(S.kind === IT ? [tmp, e, now] : [e, now]));
+    const can = S.st === 'CANCELLING';
+    const state = { phase: S.st, t: can ? null : now - S.t0, te: can ? now - S.t1 : null, tc: S.tc, test: S.test, anchors: S.sm?.anchors || {},
+      rawAnchor: S.raw && now - S.rawAt < 600 ? S.raw : null, startAnchor: S.tip };
+    fx.draw(ctx, { w, h, video, tmp, now }, progress(now), S.sm?.anchor || S.tip, state);
   }
 
   // ---------- outgoing video: canvas-backed track with effects ----------
@@ -559,15 +613,15 @@
     return changed ? new MediaStream([...vts, ...ats]) : raw;
   };
   // console probe: __tlfx()
-  window.__tlfx = () => ({ det, ticks, sent, live: live.size, busy, detOrigin, sendErr, last, st: S.st, kind: S.kind, t0: S.t0, lastHold: S.lastHold, test: S.test, cand: S.cand, haveMask, plate: !!plateImg, mixMic: mixed });
+  window.__tlfx = () => ({ det, ticks, sent, live: live.size, busy, detOrigin, sendErr, last, st: S.st, off: [...offSet], anchor: S.sm?.anchor, kind: S.kind, t0: S.t0, lastHold: S.lastHold, test: S.test, cand: S.cand, haveMask, plate: !!plateImg, mixMic: mixed });
   // preview effects without gestures; test mode never leaves (step() skips leave when S.test)
   window.__tlfxTest = (k) => {
-    if (k !== IT && k !== GOJO) return 'use INSTANT_TRANSMISSION or GOJO';
+    if (!FX[k]) return 'use one of: ' + Object.keys(FX).join(', ');
     if (S.st === 'IDLE') activate(k, performance.now(), true);
   };
   // audio-only preview: play a sound through fxBus (and the mic mix, if active) for 3 s
   window.__tlfxSound = (k) => {
-    if (k !== IT && k !== GOJO) return 'use INSTANT_TRANSMISSION or GOJO';
+    if (!FX[k]) return 'use one of: ' + Object.keys(FX).join(', ');
     sound(k); setTimeout(stopSound, 3000);
   };
   log('patch installed', location.href);

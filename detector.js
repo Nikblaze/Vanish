@@ -74,30 +74,63 @@ function segment(bmp, ts) {
   }
 }
 
-// ar = frame width/height; x is scaled by ar so distances are isotropic.
-function classify(lms, faceLms, ar) {
-  const P = (l) => ({ x: l.x * ar, y: l.y });
-  let forehead = null, center = null, r = 0;
-  if (faceLms) {
-    const a = P(faceLms[10]), b = P(faceLms[151]);
-    center = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    r = d(P(faceLms[234]), P(faceLms[454])) * 0.35;
-    forehead = { x: center.x / ar, y: center.y, r: r / ar };
+// Gesture thresholds. Ratios of hand/face size, so scale-invariant. Final tuned values are recorded in README.
+const TH = {
+  EXT: 1.1,           // finger extended: dist(tip, wrist) > dist(pip, wrist) * EXT
+  EXT_MIDDLE: 1.0,    // middle finger uses a looser test (often slightly bent in two-finger poses)
+  FOREHEAD_R: 0.35,   // forehead zone radius, fraction of face width (face landmarks 234↔454)
+  IT_TIP_R: 1.6,      // INSTANT_TRANSMISSION: both tips within FOREHEAD_R * IT_TIP_R of forehead centre
+  GOJO_CROSS: 1.5,    // GOJO crossed: tip order swapped vs knuckles AND tips within palm * GOJO_CROSS
+  GOJO_TOGETHER: 0.9, // GOJO together: dist(tip8, tip12) < palm * GOJO_TOGETHER (palm = dist(lm5, lm9))
+};
+
+// ar = frame width/height; x is scaled by ar so distances are isotropic (z too, same scale as x).
+function prepHand(raw, ar, score) {
+  const lm = raw.map((l) => ({ x: l.x * ar, y: l.y, z: l.z * ar }));
+  const ext = (tip, pip, k = TH.EXT) => d(lm[tip], lm[0]) > d(lm[pip], lm[0]) * k;
+  const e = { i: ext(8, 6), m: ext(12, 10, TH.EXT_MIDDLE), r: ext(16, 14), p: ext(20, 18) };
+  return { raw, lm, score, palm: d(lm[5], lm[9]), ext: e, twoUp: e.i && e.m && !e.r && !e.p };
+}
+const tipMid = (h) => ({ x: (h.raw[8].x + h.raw[12].x) / 2, y: (h.raw[8].y + h.raw[12].y) / 2 });
+
+// Ordered rule list. Two-hand rules are always evaluated before one-hand rules (sorted below) so a two-hand
+// pose is never read as a one-hand one. match() returns null or { anchor, anchors? } (normalized frame coords).
+// loose() is the hysteresis test used once the gesture is ACTIVE (a looser version of the pose); same return shape.
+const RULES = [
+  { id: 'INSTANT_TRANSMISSION', hands: 1,
+    match(h, F) { if (!h.twoUp) return null; const fz = F.forehead(); if (!fz) return null; const R = fz.r * TH.IT_TIP_R; return d(h.lm[8], fz.c) < R && d(h.lm[12], fz.c) < R ? { anchor: tipMid(h) } : null; },
+    loose: (h) => h.twoUp ? { anchor: tipMid(h) } : null },
+  { id: 'GOJO', hands: 1,
+    match(h) { if (!h.twoUp) return null; const lm = h.lm, t = d(lm[8], lm[12]);
+      const crossed = Math.sign(lm[8].x - lm[12].x) !== Math.sign(lm[5].x - lm[9].x) && t < h.palm * TH.GOJO_CROSS;
+      return crossed || t < h.palm * TH.GOJO_TOGETHER ? { anchor: tipMid(h) } : null; },
+    loose: (h) => h.twoUp ? { anchor: tipMid(h) } : null },
+].sort((a, b) => b.hands - a.hands); // stable: two-hand first, otherwise list order
+
+// hands = prepped list, off = Set of disabled ids. Also returns `loose`: hysteresis matches for every enabled rule.
+function classify(hands, F, off) {
+  if (!hands.length) return { gesture: 'no-hand', loose: {} };
+  const run = (rule, fn) => {
+    if (rule.hands === 2) {
+      if (hands.length < 2) return null;
+      const r = fn(hands[0], hands[1], F);
+      return r && { ...r, confidence: Math.min(hands[0].score, hands[1].score) };
+    }
+    for (const h of hands) { const r = fn(h, F); if (r) return { ...r, confidence: h.score }; }
+    return null;
+  };
+  let out = { gesture: 'none' };
+  const loose = {};
+  for (const rule of RULES) {
+    if (off.has(rule.id)) continue;
+    if (out.gesture === 'none') {
+      const r = run(rule, rule.match);
+      if (r) out = { gesture: rule.id, anchor: r.anchor, anchors: r.anchors, confidence: r.confidence };
+    }
+    const l = run(rule, rule.loose);
+    if (l) loose[rule.id] = { anchor: l.anchor, anchors: l.anchors };
   }
-  let tip = null;
-  const tipOf = (raw) => ({ x: (raw[8].x + raw[12].x) / 2, y: (raw[8].y + raw[12].y) / 2 });
-  for (const t of lms) {
-    const lm = t.lm;
-    const instant = center && d(lm[8], center) < r * 1.6 && d(lm[12], center) < r * 1.6;
-    if (instant) return { gesture: 'INSTANT_TRANSMISSION', forehead, tip: tipOf(t.raw), twoUp: true };
-    const palm = d(lm[5], lm[9]);
-    const crossed = Math.sign(lm[8].x - lm[12].x) !== Math.sign(lm[5].x - lm[9].x) && d(lm[8], lm[12]) < palm * 1.5;
-    const together = d(lm[8], lm[12]) < palm * 0.9;
-    if (crossed || together)
-      return { gesture: 'GOJO', forehead, tip: tipOf(t.raw), twoUp: true };
-    tip ||= tipOf(t.raw);
-  }
-  return { gesture: 'none', forehead, tip, twoUp: true };
+  return { ...out, loose };
 }
 
 window.addEventListener('message', (event) => {
@@ -115,16 +148,21 @@ window.addEventListener('message', (event) => {
     lastTs = ts;
     const hr = hand.detectForVideo(bmp, ts);
     const ar = bmp.width / bmp.height;
-    const hands = hr.landmarks || [];
-    // twoUp = index+middle extended, ring+pinky curled. Face runs only when some hand is twoUp.
-    const up = [];
-    for (const raw of hands) {
-      const lm = raw.map((l) => ({ x: l.x * ar, y: l.y }));
-      const ext = (tip, pip, k = 1.1) => d(lm[tip], lm[0]) > d(lm[pip], lm[0]) * k;
-      if (ext(8, 6) && ext(12, 10, 1.0) && !ext(16, 14) && !ext(20, 18)) up.push({ lm, raw });
-    }
-    let out = { gesture: hands.length ? 'none' : 'no-hand', forehead: null, tip: null, twoUp: false };
-    if (up.length) out = classify(up, face.detectForVideo(bmp, ts).faceLandmarks?.[0], ar);
+    const raws = hr.landmarks || [];
+    const hands = raws.map((raw, i) => prepHand(raw, ar, hr.handedness?.[i]?.[0]?.score ?? 1));
+    const P = (l) => ({ x: l.x * ar, y: l.y });
+    const F = { ar, zones: [], _f: undefined, _fz: undefined,
+      face() { if (this._f === undefined) this._f = face.detectForVideo(bmp, ts).faceLandmarks?.[0] || null; return this._f; }, // lazy: only when a rule asks
+      forehead() {
+        if (this._fz !== undefined) return this._fz;
+        const f = this.face();
+        if (!f) return (this._fz = null);
+        const a = P(f[10]), b = P(f[151]), c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        const r = d(P(f[234]), P(f[454])) * TH.FOREHEAD_R;
+        this.zones.push({ x: c.x / ar, y: c.y, r, label: 'forehead' }, { x: c.x / ar, y: c.y, r: r * TH.IT_TIP_R, label: 'IT tips' });
+        return (this._fz = { c, r });
+      } };
+    const out = classify(hands, F, new Set(m.off || []));
     let mask = null;
     if (m.wantMask) {
       ensureSeg();
@@ -136,7 +174,7 @@ window.addEventListener('message', (event) => {
     while (stamps.length && now - stamps[0] > 2000) stamps.shift();
     const fps = Math.round((stamps.length / 2) * 10) / 10;
     const msg = { ...out, fps };
-    if (m.debug) msg.hands = hands.flat().map(({ x, y }) => ({ x, y }));
+    if (m.debug) { msg.hands = raws.map((raw) => raw.map(({ x, y }) => ({ x, y }))); msg.zones = F.zones; }
     if (mask) msg.mask = mask;
     event.source.postMessage({ type: 'tlfx:result', ...msg }, event.origin, mask ? [mask.buf] : []);
   } catch (e) {

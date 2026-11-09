@@ -29,15 +29,16 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 4. Hold a gesture ~0.7 s → effect starts and a local-only countdown appears.
    - Hold for 5 s → the extension clicks Leave.
    - Remove your hand for > 1 s → effect reverses, you stay in the call.
+5. To turn a gesture off, expand the **`TLFX ●`** pill → **Gestures** and untick it (persisted in `localStorage` key `tlfx-off`).
 
 ### Console helpers (DevTools on the meeting tab)
 
 | Command | What it does |
 |---|---|
-| `__tlfxTest('INSTANT_TRANSMISSION')` / `__tlfxTest('GOJO')` | Preview an effect for 4 s. **Never leaves.** |
-| `__tlfxSound('INSTANT_TRANSMISSION')` / `__tlfxSound('GOJO')` | Play just the sound for 3 s |
+| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`); ignores the Gestures toggles |
+| `__tlfxSound(id)` | Play just the sound for 3 s (same ids) |
 | `__tlfx()` | Dump internal state (detector status, frames sent, state machine, mic mixing) |
-| `window.__tlfxDebug = true` | Draw gesture label, hand landmarks and forehead zone onto the video |
+| `window.__tlfxDebug = true` | Draw onto the video: gesture + confidence, state / candidate / active effect, both hands' skeletons, rule zones, the smoothed anchor, and loose (hysteresis) matches |
 | `localStorage.setItem('tlfx-mixmic','0')` + refresh | Disable mixing effect sounds into your mic |
 
 ## Configuration
@@ -45,10 +46,24 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 | Setting | Where | Default |
 |---|---|---|
 | Hold time before leaving | `LEAVE_MS` in `inject.js` | `5000` ms |
-| Arming time | `onResult()` in `inject.js` | `700` ms |
-| Cancel grace period | `step()` in `inject.js` | `1000` ms |
+| Arming time | `ARM_MS` in `inject.js` | `700` ms |
+| Cancel grace period (gap) | `GAP_MS` in `inject.js` | `1000` ms |
+| Cancel reverse animation | `CANCEL_MS` in `inject.js` | `600` ms |
+| Preview length | `TEST_MS` in `inject.js` | `4000` ms |
+| Anchor smoothing (weight of newest anchor) | `ANCHOR_EMA` in `inject.js` | `0.5` |
 | Detector start delay | `sendTick()` in `inject.js` | `4000` ms after camera start |
-| Gesture thresholds | `classify()` in `detector.js` | see code |
+| Gesture thresholds | `TH` at the top of `detector.js` | see below |
+
+Gesture thresholds (`TH`, ratios of hand/face size, so scale-invariant):
+
+| Name | Default | Meaning |
+|---|---|---|
+| `EXT` | `1.1` | finger extended: `dist(tip, wrist) > dist(pip, wrist) × EXT` |
+| `EXT_MIDDLE` | `1.0` | looser test for the middle finger |
+| `FOREHEAD_R` | `0.35` | forehead zone radius, fraction of face width |
+| `IT_TIP_R` | `1.6` | Instant Transmission: both tips within `FOREHEAD_R × IT_TIP_R` of forehead centre |
+| `GOJO_CROSS` | `1.5` | Gojo crossed: tips swapped vs knuckles and within `palm × GOJO_CROSS` |
+| `GOJO_TOGETHER` | `0.9` | Gojo together: `dist(tip8, tip12) < palm × GOJO_TOGETHER` |
 
 ---
 
@@ -85,10 +100,10 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 Audio: mic → WebAudio `MediaStreamSource` + effect bus → `MediaStreamDestination` → returned to the app. If the `AudioContext` isn't `running`, the raw mic is returned unchanged.
 
 ### 2. Detection off the main page
-Teams' CSP blocks wasm compilation in the page, so MediaPipe runs in an extension-origin iframe. Frames are downscaled to 320 px and transferred as `ImageBitmap` (zero-copy) with a `busy` flag for backpressure. The face model runs only when a hand shows two raised fingers; the segmenter only for Instant Transmission.
+Teams' CSP blocks wasm compilation in the page, so MediaPipe runs in an extension-origin iframe. Frames are downscaled to 320 px and transferred as `ImageBitmap` (zero-copy) with a `busy` flag for backpressure. The face model runs lazily, once per frame and only when a rule asks for it (e.g. Instant Transmission with a two-finger hand); the segmenter only for Instant Transmission.
 
 ### 3. Gesture rules
-Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected):
+Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected). Rules live in an ordered `RULES` list in `detector.js`; two-hand rules are evaluated before one-hand rules, the first match wins, and each rule has a `match()` plus a looser `loose()` for hysteresis. All thresholds live in `TH`.
 - finger extended: `dist(tip, wrist) > dist(pip, wrist) × 1.1`
 - **Instant Transmission**: index + middle up, ring + pinky down, both tips inside the forehead zone (face landmarks 10/151, radius from face width)
 - **Gojo**: same finger pose, tips crossed (left/right order swapped vs. knuckles) or pressed together
@@ -100,7 +115,10 @@ IDLE ──held 700ms──▶ ACTIVE ──no hold >1s──▶ CANCELLING ─�
                        ▼
                     LEAVING ── click Leave ── camera stops ──▶ IDLE
 ```
-Arming delay, gap tolerance, hysteresis (once active, two raised fingers are enough), and stale-result rejection keep detection flicker from causing false triggers or early cancels.
+Arming delay, gap tolerance, hysteresis (once active, the rule's `loose` test is enough to keep it held), and stale-result rejection keep detection flicker from causing false triggers or early cancels.
+
+### Adding a gesture
+Add a rule (same `id`) to `RULES` in `detector.js` and an effect to `FX` in `inject.js` (`draw`, `sound`, `defaultAnchor`, flags). It appears in the Gestures toggles automatically.
 
 ### 5. Effects
 Canvas 2D compositing. Vanish = background plate masked to the person silhouette (`destination-in`), brightness-matched to the live frame to cancel camera auto-exposure, then the full plate once fully vanished. Void = expanding clip circle, seeded starfield, gradients. A local page overlay shows the countdown (only you see it).
