@@ -112,9 +112,9 @@ const TH = {
   FWD_STRAIGHT: 0.6, // finger pointing at the camera: 3D cos between (pip−mcp) and (tip−pip) > this (PIP not bent)
   FWD_Z: 0.25,       // ...and tip closer to the camera than its MCP by FWD_Z * hs (MediaPipe z: smaller = closer)
   FWD_SHORT: 0.55,   // ...or 2D tip–MCP length < FWD_SHORT * hs (foreshortened but straight)
-  HP_THUMB: 0.7,  // HOLLOW_PURPLE: thumb out to the side — d(tip4, idxMCP5) > HP_THUMB * hs (GOJO's thumb is tucked; GOJO never checks it)
-  HP_SPREAD: 1.3, // HOLLOW_PURPLE: index/middle tips spread in a V — d(tip8, tip12) > HP_SPREAD * palm. GOJO "together" is
-                  //  < GOJO_TOGETHER (0.9) * palm, so 0.9–1.3 is a dead zone where neither fires.
+  HP_THUMB: 0.6,  // HOLLOW_PURPLE: thumb out to the side — d(tip4, idxMCP5) > HP_THUMB * hs (GOJO's thumb is tucked; GOJO never checks it)
+  HP_SPREAD: 1.15, // HOLLOW_PURPLE: index/middle tips spread in a V — d(tip8, tip12) > HP_SPREAD * palm. GOJO "together" is
+                  //  < GOJO_TOGETHER (0.9) * palm, so 0.9–1.15 is a dead zone where neither fires.
   SC_CROSS: 0.7,    // SHADOW_CLONE: finger-segment midpoints closer than SC_CROSS * mean finger length (crossing near their middles)
 };
 
