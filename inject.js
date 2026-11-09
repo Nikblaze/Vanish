@@ -699,6 +699,136 @@
     noise(t, 0.9, node('lowpass', 1000), 0.8); osc('sine', 130, 38, t, 0.45, 0.5); noise(t, 0.5, node('highpass', 3000), 0.15); // big puff + airy hiss
   }
 
+  // BANKAI timeline (p 0→1 over the hold; reversed on cancel):
+  //  charge 0–0.40   dark red/black flame aura rises from the silhouette edge, background darkens + desaturates,
+  //                  debris starts lifting from the bottom, faint camera shake
+  //  build  0.40–0.85 aura taller/brighter, shake grows; at 0.60 a column of black-red light erupts from the hands upward
+  //  climax 0.85–1.0 one bright diagonal slash crosses the frame (q 0–.25), white flash (q .25–.35), the frame splits along
+  //                  the slash and the halves slide apart revealing black (q .35–1)
+  //  end    p = 1    black frame while Leave is clicked
+  // Pure function of p (now only for flicker/flow/shake phase). k = ease(seg(p, 0, 0.85)) is the overall intensity.
+  const BK_DEB = (() => { const r = mkRnd(77); return Array.from({ length: 50 }, () => ({ x: r(), ph: r(), sp: 0.5 + r(), sz: 2 + r() * 4, rot: r() * 6.283 })); })();
+  let bkAura = null, bkNoise = null;
+  function bkNoiseTex() { // 128x128 tileable-ish soft black blobs, rendered once
+    if (bkNoise) return bkNoise;
+    bkNoise = document.createElement('canvas'); bkNoise.width = bkNoise.height = 128;
+    const c = bkNoise.getContext('2d'), r = mkRnd(31);
+    for (let i = 0; i < 40; i++) { const x = r() * 128, y = r() * 128, rr = 6 + r() * 14; for (const ox of [-128, 0, 128]) for (const oy of [-128, 0, 128]) glow(c, x + ox, y + oy, rr, 'rgba(0,0,0,0.9)'); }
+    return bkNoise;
+  }
+  function bkAuraDraw(ctx, W, H, k, now) {
+    const mw = maskHard.width, mh = maskHard.height;
+    if (!mw || !mh) return;
+    if (!bkAura) bkAura = document.createElement('canvas');
+    if (bkAura.width !== mw || bkAura.height !== mh) { bkAura.width = mw; bkAura.height = mh; }
+    const c = bkAura.getContext('2d');
+    c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1; c.clearRect(0, 0, mw, mh);
+    c.filter = 'blur(3px)';
+    for (let i = 0; i < 5; i++) { // flame tails: copies rising and growing about the bottom-centre
+      c.save(); c.translate(mw / 2, mh - i * (2 + 6 * k)); c.scale(1 + 0.03 * i * k, 1 + 0.03 * i * k); c.translate(-mw / 2, -mh);
+      c.drawImage(maskHard, 0, 0); c.restore();
+    }
+    c.filter = 'none';
+    c.globalCompositeOperation = 'source-in';
+    const g = c.createLinearGradient(0, mh, 0, 0);
+    g.addColorStop(0, 'rgba(170,0,10,1)'); g.addColorStop(0.5, 'rgba(90,0,0,1)'); g.addColorStop(1, 'rgba(10,0,0,1)');
+    c.fillStyle = g; c.fillRect(0, 0, mw, mh);
+    c.globalCompositeOperation = 'destination-out'; c.globalAlpha = 0.85;
+    const nt = bkNoiseTex(), ox = Math.sin(now / 900) * 10 - 128, oy = -((now * 0.06) % 128) - 128; // scrolls up
+    for (let y = oy; y < mh; y += 128) for (let x = ox; x < mw; x += 128) c.drawImage(nt, x, y);
+    c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1;
+    ctx.save(); ctx.globalAlpha = 0.35 + 0.65 * k; ctx.drawImage(bkAura, 0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.25 * k; ctx.drawImage(bkAura, 0, 0, W, H); ctx.restore();
+  }
+  function bkColPath(ctx, bx, yb, yt, w, now) { // flickering column polygon, 24 rows from base up
+    const L = [], R = [];
+    for (let i = 0; i < 24; i++) { const y = yb + (yt - yb) * i / 23, o = Math.sin(i * 0.9 + now / 60) * w * 0.15; L.push([bx - w / 2 + o, y]); R.push([bx + w / 2 + o, y]); }
+    ctx.beginPath(); L.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); R.reverse().forEach(([x, y]) => ctx.lineTo(x, y)); ctx.closePath();
+  }
+  function fxBankai(ctx, f, p, a, s) {
+    const W = f.w, H = f.h, now = f.now, tc = f.tmp.getContext('2d');
+    if (p <= 0) return;
+    if (p >= 1) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); return; }
+    const k = ease(seg(p, 0, 0.85));
+    ctx.save(); ctx.filter = `saturate(${1 - 0.8 * k}) brightness(${1 - 0.55 * k})`; ctx.drawImage(f.video, 0, 0, W, H); ctx.restore(); // 1 darken
+    if (haveMask) bkAuraDraw(ctx, W, H, k, now); // 2 aura
+    if (haveMask) { // 3 person on top
+      tc.globalCompositeOperation = 'source-over'; tc.clearRect(0, 0, W, H); tc.drawImage(f.video, 0, 0, W, H);
+      tc.globalCompositeOperation = 'destination-in'; tc.drawImage(maskHard, 0, 0, W, H); tc.globalCompositeOperation = 'source-over';
+      ctx.save(); ctx.filter = `saturate(${1 - 0.3 * k}) brightness(${1 - 0.15 * k})`; ctx.drawImage(f.tmp, 0, 0); ctx.restore();
+    }
+    ctx.save(); // 4 debris
+    const nd = Math.floor(BK_DEB.length * k);
+    for (let i = 0; i < nd; i++) {
+      const d = BK_DEB[i], u = (now * 0.00025 * d.sp + d.ph) % 1, y = H * (1 - u), x = d.x * W + Math.sin(now / 500 + d.ph * 10) * 6;
+      ctx.globalAlpha = Math.min(1, y / (0.25 * H));
+      ctx.save(); ctx.translate(x, y); ctx.rotate(d.rot + now * 0.001 * d.sp);
+      ctx.fillStyle = 'rgba(30,10,10,0.9)'; ctx.fillRect(-d.sz / 2, -d.sz * 0.35, d.sz, d.sz * 0.7);
+      ctx.strokeStyle = 'rgba(200,30,30,0.8)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(-d.sz / 2, -d.sz * 0.35); ctx.lineTo(d.sz / 2, -d.sz * 0.35); ctx.stroke();
+      ctx.restore();
+    }
+    ctx.restore();
+    if (p >= 0.6) { // 5 column
+      const cu = ease(seg(p, 0.6, 0.85)), tp = s.anchors?.top || a, bx = tp.x * W, by = tp.y * H, w = W * (0.03 + 0.1 * cu), yt = by * (1 - ease(seg(p, 0.6, 0.68)));
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = `rgba(220,20,20,${0.25 * cu})`; bkColPath(ctx, bx, by, yt, w * 2, now); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+      const g = ctx.createLinearGradient(bx - w / 2, 0, bx + w / 2, 0);
+      g.addColorStop(0, 'rgba(255,40,30,0.95)'); g.addColorStop(0.3, 'rgba(120,0,0,0.95)'); g.addColorStop(0.5, 'rgba(5,0,0,0.98)'); g.addColorStop(0.7, 'rgba(120,0,0,0.95)'); g.addColorStop(1, 'rgba(255,40,30,0.95)');
+      ctx.fillStyle = g; bkColPath(ctx, bx, by, yt, w, now); ctx.fill();
+      ctx.globalCompositeOperation = 'lighter'; glow(ctx, bx, by, w * 1.5, 'rgba(255,60,40,0.8)');
+      ctx.restore();
+    }
+    if (p < 0.85) { // 6 shake
+      const amp = 0.012 * W * k * k;
+      if (amp >= 0.5) {
+        const dx = amp * (Math.sin(now * 0.091) + Math.sin(now * 0.137)) / 2, dy = amp * (Math.sin(now * 0.113) + Math.sin(now * 0.071)) / 2, sc = 1 + 2.5 * amp / W;
+        ctx.save(); ctx.translate(W / 2 + dx, H / 2 + dy); ctx.scale(sc, sc); ctx.translate(-W / 2, -H / 2); ctx.drawImage(ctx.canvas, 0, 0, W, H); ctx.restore();
+      }
+      return;
+    }
+    const q = seg(p, 0.85, 1), S0 = { x: 0.88 * W, y: -0.1 * H }, S1 = { x: 0.12 * W, y: 1.1 * H };
+    const len = Math.hypot(S1.x - S0.x, S1.y - S0.y), t = { x: (S1.x - S0.x) / len, y: (S1.y - S0.y) / len }, n = { x: -t.y, y: t.x };
+    if (q < 0.35) {
+      const Lq = ease(seg(q, 0, 0.25)), E = { x: S0.x + (S1.x - S0.x) * Lq, y: S0.y + (S1.y - S0.y) * Lq };
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+      for (const [lw, c] of [[18, 'rgba(255,60,40,0.5)'], [4, 'rgba(255,245,240,1)']]) { ctx.strokeStyle = c; ctx.lineWidth = lw; ctx.beginPath(); ctx.moveTo(S0.x, S0.y); ctx.lineTo(E.x, E.y); ctx.stroke(); }
+      ctx.fillStyle = 'rgba(255,200,180,0.9)';
+      for (let i = 0; i < 8; i++) { const an = now * 0.03 + i * 2.1, r = 6 + (i * 7) % 22; ctx.fillRect(E.x + Math.cos(an) * r, E.y + Math.sin(an) * r, 2, 2); }
+      const fl = 0.8 * Math.sin(Math.PI * seg(q, 0.25, 0.35));
+      if (fl > 0.003) { ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = `rgba(255,255,255,${fl})`; ctx.fillRect(0, 0, W, H); }
+      ctx.restore();
+      return;
+    }
+    tc.globalCompositeOperation = 'source-over'; tc.clearRect(0, 0, W, H); tc.drawImage(ctx.canvas, 0, 0, W, H);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const D = ease(seg(q, 0.35, 1)) * 0.55 * Math.max(W, H), B = 3 * Math.max(W, H), A = { x: S0.x - t.x * B, y: S0.y - t.y * B }, E2 = { x: S1.x + t.x * B, y: S1.y + t.y * B };
+    for (const sg of [1, -1]) {
+      ctx.save(); ctx.translate(sg * (n.x * D + t.x * D * 0.3), sg * (n.y * D + t.y * D * 0.3));
+      ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(E2.x, E2.y); ctx.lineTo(E2.x + sg * n.x * B, E2.y + sg * n.y * B); ctx.lineTo(A.x + sg * n.x * B, A.y + sg * n.y * B); ctx.closePath(); ctx.clip();
+      ctx.drawImage(f.tmp, 0, 0, W, H);
+      ctx.strokeStyle = `rgba(255,80,60,${1 - seg(q, 0.35, 0.7)})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(E2.x, E2.y); ctx.stroke();
+      ctx.restore();
+    }
+  }
+  function soundBankai(b) {
+    const { ac, T, out, go, node, gain, osc, noise, holdS } = b, at = (p) => p * holdS, r = mkRnd(9), end = at(0.85) + 0.05;
+    const nb = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate), nd = nb.getChannelData(0);
+    for (let i = 0; i < nd.length; i++) nd[i] = r() * 2 - 1;
+    const roar = ac.createBufferSource(), lp = node('lowpass', 200), env = gain(0, out), sub = ac.createOscillator(), sl = node('lowpass', 120), se = gain(0, out);
+    roar.buffer = nb; roar.loop = true; lp.Q.value = 0.8; roar.connect(lp).connect(env);
+    lp.frequency.setValueAtTime(200, T); lp.frequency.exponentialRampToValueAtTime(1800, T + at(0.84));
+    sub.type = 'sawtooth'; sub.frequency.value = 45; sub.connect(sl).connect(se);
+    for (const [e, v] of [[env, 0.5], [se, 0.25]]) { e.gain.setValueAtTime(0, T); e.gain.linearRampToValueAtTime(v, T + at(0.84)); e.gain.exponentialRampToValueAtTime(0.0001, T + end); }
+    go(roar, 0, end + 0.05); go(sub, 0, end + 0.05);
+    for (let i = 0; i < 45; i++) { const t = at(0.15 + 0.69 * Math.sqrt(r())); noise(t, 0.012, node('highpass', 2500), 0.15 + 0.3 * (t / at(0.84))); } // crackle
+    noise(at(0.6), 1.0, node('lowpass', 600), 0.6); osc('sine', 85, 35, at(0.6), 0.8, 0.45); // column eruption
+    const ts = at(0.86);
+    for (const f of [1830, 2770, 3910, 5150]) osc('sine', f, f, ts, 0.7, 0.07); // metallic ring
+    noise(ts - 0.06, 0.16, node('bandpass', 6000), 0.5, [8000, 1500]); // swoosh
+    osc('sine', 70, 30, at(0.9), 0.6, 0.5); // boom
+  }
+
   // Effect registry. draw(ctx, frame, progress, anchor, state):
   //   frame = { w, h, video, tmp, now }; progress 0→1 over the hold (runs backwards while CANCELLING, 1 while LEAVING);
   //   anchor = smoothed primary anchor {x,y} in normalized output coords (detector frames are a downscale of the same,
@@ -734,6 +864,7 @@
       } },
     ROOM: { id: 'ROOM', label: 'Room (dome)', needsMask: true, needsBackgroundPlate: true, defaultAnchor: { x: 0.5, y: 0.45 }, draw: fxRoom, sound: soundRoom },
     SHADOW_CLONE: { id: 'SHADOW_CLONE', label: 'Shadow clone', needsMask: true, needsBackgroundPlate: true, defaultAnchor: { x: 0.5, y: 0.5 }, draw: fxClone, sound: soundClone },
+    BANKAI: { id: 'BANKAI', label: 'Bankai (sword)', needsMask: true, needsBackgroundPlate: false, defaultAnchor: { x: 0.5, y: 0.6 }, draw: fxBankai, sound: soundBankai },
   };
 
   function renderFx(ctx, w, h, video, tmp, now) {

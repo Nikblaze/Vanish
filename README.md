@@ -10,6 +10,7 @@ Works on **Microsoft Teams web** (`teams.microsoft.com`, `teams.live.com`, `team
 | Index + middle crossed (or pressed together), hand raised | **Domain Expansion**: black void expands from your hand, starfield, everything goes dark |
 | **Room**: one hand palm-down, all five fingers spread and curved down like an upside-down bowl, hand above the bottom quarter of the frame | **Room**: particle ring, cyan dome expands past the frame, frame is sliced into tiles, you get scattered, tiles drift apart into black. Needs captured background |
 | **Shadow Clone**: both hands, index + middle pressed together on each, one pair vertical and the other horizontal forming a "+", crossing near their middles | **Shadow clone**: smoke puffs leave copies of you, the copies multiply, then everyone (you included) bursts into smoke and the room is empty. Needs captured background |
+| **Bankai**: both hands as fists stacked like gripping a sword hilt (or one fist held out with the other hand gripping its wrist), both hands above the bottom quarter | **Bankai**: dark red aura rises around you, the room darkens, debris lifts, a black-red light column erupts from your hands, then a slash splits the frame apart into black |
 
 All visuals and sounds are generated in code. No third-party character art, clips, or audio are included.
 
@@ -37,7 +38,7 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 
 | Command | What it does |
 |---|---|
-| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`, `ROOM`, `SHADOW_CLONE`; e.g. `__tlfxTest('SHADOW_CLONE')`); ignores the Gestures toggles |
+| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`, `ROOM`, `SHADOW_CLONE`, `BANKAI`; e.g. `__tlfxTest('BANKAI')`); ignores the Gestures toggles |
 | `__tlfxSound(id)` | Play just the sound for 3 s (same ids) |
 | `__tlfx()` | Dump internal state (detector status, frames sent, state machine, mic mixing) |
 | `window.__tlfxDebug = true` | Draw onto the video: gesture + confidence, state / candidate / active effect, both hands' skeletons, rule zones, the smoothed anchor, and loose (hysteresis) matches |
@@ -79,6 +80,11 @@ Gesture thresholds (`TH`, ratios of hand/face size, so scale-invariant):
 | `SC_AXIS` | `0.75` | Shadow Clone: one pair within ~41° of vertical, the other within ~41° of horizontal |
 | `SC_NEAR` | `3` | Shadow Clone / Gojo: a second hand with its wrist within `SC_NEAR × hand size` counts as a seal attempt and blocks Gojo. In the seal, the partly hidden hand only needs its index up (ring + pinky curled); the other needs the full two-finger pose |
 | `SC_CROSS` | `0.7` | Shadow Clone: finger-segment midpoints closer than `SC_CROSS × mean finger length` |
+| `BK_MAX_EXT` | `1` | Bankai: a "fist" has at most this many of index..pinky extended |
+| `BK_STACK` | `0.7` | Bankai stacked fists: `min(d(h1.lm5, h2.lm17), d(h2.lm5, h1.lm17)) < BK_STACK × mean hand size` |
+| `BK_VERT` | `0.6` | Bankai stacked fists: palm centres one above the other, `\|dy\| / dist > BK_VERT` |
+| `BK_WRIST` | `0.7` | Bankai wrist grip: other hand's palm centre within `BK_WRIST × fist hand size` of the fist's wrist |
+| `BK_NEAR_LOOSE` | `3` | Bankai hysteresis: both hands fist-ish (≤ 2 extended), wrists within `BK_NEAR_LOOSE × hand size` |
 
 ---
 
@@ -124,6 +130,7 @@ Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected). Rules l
 - **Gojo**: same finger pose, tips crossed (left/right order swapped vs. knuckles) or pressed together. Ignored when another hand's wrist is within `SC_NEAR × hand size`, so a cross seal (even with one hand partly hidden) never reads as Gojo
 - **Shadow Clone**: two hands, each index+middle up and pressed together; each pair is one segment (knuckle mid to tip mid), the two are near-perpendicular (`|cos|`), one near-vertical and one near-horizontal, and cross near their middles
 - **Room**: palm normal `(lm5−lm0)×(lm17−lm0)` mostly vertical (`|ny|`, orientation-agnostic), ≥3 fingertips below their knuckles (palm-down bowl, not palm-up cup), fingers fanned (`tip8↔tip20` vs `mcp5↔mcp17`), thumb spread, wrist not in the bottom `LOW_ZONE`
+- **Bankai**: both hands above the bottom `LOW_ZONE`; each hand is a fist (≤ `BK_MAX_EXT` of index..pinky extended). Either the fists are stacked (index MCP of one beside the pinky MCP of the other, palm centres vertically aligned) or one fist's wrist is gripped by the other hand's palm centre (only the held hand must be a fist)
 
 ### 4. State machine
 ```

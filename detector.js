@@ -97,6 +97,11 @@ const TH = {
   SC_PERP_COS: 0.45,// SHADOW_CLONE: |cos| between the two finger directions < this (≈ 63°–117°, a "+")
   SC_AXIS: 0.75,    // SHADOW_CLONE: one pair within ~41° of vertical (|vy|/len > SC_AXIS), the other within ~41° of horizontal
   SC_NEAR: 3,       // SHADOW_CLONE/GOJO: another hand with its wrist within SC_NEAR * hs = seal attempt, so GOJO is blocked
+  BK_MAX_EXT: 1,    // BANKAI: a "fist" has at most this many of index..pinky extended (one misread finger tolerated)
+  BK_STACK: 0.7,    // BANKAI stacked fists: min(d(h1.idxMCP5, h2.pinkyMCP17), d(h2.lm5, h1.lm17)) < BK_STACK * mean hs
+  BK_VERT: 0.6,     // BANKAI stacked fists: palm centres one above the other, |dy| / dist > BK_VERT
+  BK_WRIST: 0.7,    // BANKAI wrist grip: other hand's palm centre within BK_WRIST * fist hs of the fist's wrist (lm0)
+  BK_NEAR_LOOSE: 3, // BANKAI hysteresis: both hands fist-ish (<= 2 extended), wrists within BK_NEAR_LOOSE * hs
   SC_CROSS: 0.7,    // SHADOW_CLONE: finger-segment midpoints closer than SC_CROSS * mean finger length (crossing near their middles)
 };
 
@@ -146,6 +151,23 @@ function scMetrics(h1, h2) {
     c: { x: (s1.m.x + s2.m.x) / 2, y: (s1.m.y + s2.m.y) / 2 } };
 }
 
+// BANKAI: two-handed sword grip. Either two stacked fists, or one fist held out with the other hand gripping its wrist.
+const nExt = (h) => +h.ext.i + +h.ext.m + +h.ext.r + +h.ext.p;
+const fist = (h) => nExt(h) <= TH.BK_MAX_EXT;
+const pcLm = (h) => { const p = [0, 5, 9, 13, 17].map((i) => h.lm[i]); return { x: p.reduce((a, l) => a + l.x, 0) / 5, y: p.reduce((a, l) => a + l.y, 0) / 5 }; };
+const up = (h) => palmMid(h).y < 1 - TH.LOW_ZONE;
+function bkMetrics(h1, h2, ar) {
+  const p1 = pcLm(h1), p2 = pcLm(h2), hs = (h1.hs + h2.hs) / 2, dist = d(p1, p2) || 1e-6;
+  // wrist grip: the holding palm must be nearer the fist's wrist than the fist's own palm — rejects interlaced/clasped hands
+  const grip = Math.min(...[[h1, h2, p2], [h2, h1, p1]].filter(([f, , po]) => fist(f) && d(po, f.lm[0]) < d(po, pcLm(f))).map(([f, , po]) => d(po, f.lm[0]) / f.hs), Infinity);
+  const hi = p1.y < p2.y ? h1 : h2;
+  return { fists: +fist(h1) + +fist(h2), hs,
+    stack: Math.min(d(h1.lm[5], h2.lm[17]), d(h2.lm[5], h1.lm[17])) / hs,
+    vert: Math.abs(p1.y - p2.y) / dist, grip, up: up(h1) && up(h2),
+    c: { x: (p1.x + p2.x) / 2 / ar, y: (p1.y + p2.y) / 2 },
+    top: { x: (hi.lm[5].x + hi.lm[17].x) / 2 / ar, y: (hi.lm[5].y + hi.lm[17].y) / 2 } };
+}
+
 // Ordered rule list. Two-hand rules are always evaluated before one-hand rules (sorted below) so a two-hand
 // pose is never read as a one-hand one. match() returns null or { anchor, anchors? } (normalized frame coords).
 // loose() is the hysteresis test used once the gesture is ACTIVE (a looser version of the pose); same return shape.
@@ -155,6 +177,12 @@ const RULES = [
       if (m.ok2) F.zones.push({ x: m.c.x / F.ar, y: m.c.y, r: m.len, label: 'SC cos ' + m.cos.toFixed(2) + ' ax ' + +m.axis + ' x ' + m.cross.toFixed(2) + ' tog ' + +m.tog });
       return m.ok2 && m.tog && m.cos < TH.SC_PERP_COS && m.axis && m.cross < TH.SC_CROSS ? { anchor: { x: m.c.x / F.ar, y: m.c.y } } : null; },
     loose(h1, h2, F) { if (!pairish(h1) || !pairish(h2)) return null; const c = scMetrics(h1, h2).c; return { anchor: { x: c.x / F.ar, y: c.y } }; } },
+  { id: 'BANKAI', hands: 2,
+    match(h1, h2, F) { const m = bkMetrics(h1, h2, F.ar);
+      if (m.fists) F.zones.push({ x: m.c.x, y: m.c.y, r: m.hs, label: 'BK st ' + m.stack.toFixed(2) + ' vt ' + m.vert.toFixed(2) + ' gr ' + m.grip.toFixed(2) + ' f ' + m.fists });
+      return m.up && ((m.fists === 2 && m.stack < TH.BK_STACK && m.vert > TH.BK_VERT) || m.grip < TH.BK_WRIST) ? { anchor: m.c, anchors: { top: m.top } } : null; },
+    loose(h1, h2, F) { const m = bkMetrics(h1, h2, F.ar);
+      return m.up && nExt(h1) <= 2 && nExt(h2) <= 2 && d(h1.lm[0], h2.lm[0]) < TH.BK_NEAR_LOOSE * m.hs ? { anchor: m.c, anchors: { top: m.top } } : null; } },
   { id: 'INSTANT_TRANSMISSION', hands: 1,
     match(h, F) { if (!h.twoUp) return null; const fz = F.forehead(); if (!fz) return null; const R = fz.r * TH.IT_TIP_R; return d(h.lm[8], fz.c) < R && d(h.lm[12], fz.c) < R ? { anchor: tipMid(h) } : null; },
     loose: (h) => h.twoUp ? { anchor: tipMid(h) } : null },
