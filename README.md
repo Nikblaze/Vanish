@@ -9,6 +9,7 @@ Works on **Microsoft Teams web** (`teams.microsoft.com`, `teams.live.com`, `team
 | Index + middle finger on your forehead | **Instant Transmission**: fingertip glow, flicker, you vanish from the frame |
 | Index + middle crossed (or pressed together), hand raised | **Domain Expansion**: black void expands from your hand, starfield, everything goes dark |
 | **Room**: one hand palm-down, all five fingers spread and curved down like an upside-down bowl, hand above the bottom quarter of the frame | **Room**: particle ring, cyan dome expands past the frame, frame is sliced into tiles, you get scattered, tiles drift apart into black. Needs captured background |
+| **Shadow Clone**: both hands, index + middle pressed together on each, one pair vertical and the other horizontal forming a "+", crossing near their middles | **Shadow clone**: smoke puffs leave copies of you, the copies multiply, then everyone (you included) bursts into smoke and the room is empty. Needs captured background |
 
 All visuals and sounds are generated in code. No third-party character art, clips, or audio are included.
 
@@ -36,7 +37,7 @@ After changing code: click reload (↻) on the extension card, then refresh the 
 
 | Command | What it does |
 |---|---|
-| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`, `ROOM`; e.g. `__tlfxTest('ROOM')`); ignores the Gestures toggles |
+| `__tlfxTest(id)` | Preview an effect for 4 s (`TEST_MS`). **Never leaves.** `id` is any registered effect (currently `INSTANT_TRANSMISSION`, `GOJO`, `ROOM`, `SHADOW_CLONE`; e.g. `__tlfxTest('SHADOW_CLONE')`); ignores the Gestures toggles |
 | `__tlfxSound(id)` | Play just the sound for 3 s (same ids) |
 | `__tlfx()` | Dump internal state (detector status, frames sent, state machine, mic mixing) |
 | `window.__tlfxDebug = true` | Draw onto the video: gesture + confidence, state / candidate / active effect, both hands' skeletons, rule zones, the smoothed anchor, and loose (hysteresis) matches |
@@ -73,6 +74,10 @@ Gesture thresholds (`TH`, ratios of hand/face size, so scale-invariant):
 | `ROOM_TIPS_DOWN` | `3` | Room: at least this many of index..pinky tips dropped |
 | `ROOM_SPREAD` | `1.3` | Room: `dist(tip8, tip20) > ROOM_SPREAD × dist(mcp5, mcp17)`, fingers fanned |
 | `ROOM_THUMB` | `0.5` | Room: thumb spread, `dist(tip4, mcp5) > ROOM_THUMB × hand size` |
+| `SC_TOGETHER` | `1.0` | Shadow Clone: index+middle pressed together on each hand, `dist(tip8, tip12) < palm × SC_TOGETHER` |
+| `SC_PERP_COS` | `0.45` | Shadow Clone: `\|cos\|` between the two finger directions below this (≈ 63°–117°, a "+") |
+| `SC_AXIS` | `0.75` | Shadow Clone: one pair within ~41° of vertical, the other within ~41° of horizontal |
+| `SC_CROSS` | `0.7` | Shadow Clone: finger-segment midpoints closer than `SC_CROSS × mean finger length` |
 
 ---
 
@@ -115,7 +120,8 @@ Teams' CSP blocks wasm compilation in the page, so MediaPipe runs in an extensio
 Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected). Rules live in an ordered `RULES` list in `detector.js`; two-hand rules are evaluated before one-hand rules, the first match wins, and each rule has a `match()` plus a looser `loose()` for hysteresis. All thresholds live in `TH`.
 - finger extended: `dist(tip, wrist) > dist(pip, wrist) × 1.1`
 - **Instant Transmission**: index + middle up, ring + pinky down, both tips inside the forehead zone (face landmarks 10/151, radius from face width)
-- **Gojo**: same finger pose, tips crossed (left/right order swapped vs. knuckles) or pressed together
+- **Gojo**: same finger pose, tips crossed (left/right order swapped vs. knuckles) or pressed together. Ignored when two two-finger hands are visible, so a slightly-off cross seal never reads as Gojo
+- **Shadow Clone**: two hands, each index+middle up and pressed together; each pair is one segment (knuckle mid to tip mid), the two are near-perpendicular (`|cos|`), one near-vertical and one near-horizontal, and cross near their middles
 - **Room**: palm normal `(lm5−lm0)×(lm17−lm0)` mostly vertical (`|ny|`, orientation-agnostic), ≥3 fingertips below their knuckles (palm-down bowl, not palm-up cup), fingers fanned (`tip8↔tip20` vs `mcp5↔mcp17`), thumb spread, wrist not in the bottom `LOW_ZONE`
 
 ### 4. State machine

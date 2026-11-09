@@ -93,6 +93,10 @@ const TH = {
   ROOM_TIPS_DOWN: 3,     // ROOM: at least this many of index..pinky tips dropped
   ROOM_SPREAD: 1.3,      // ROOM: dist(tip8, tip20) > ROOM_SPREAD * dist(mcp5, mcp17) — fingers fanned
   ROOM_THUMB: 0.5,       // ROOM: thumb spread — dist(tip4, mcp5) > ROOM_THUMB * hs
+  SC_TOGETHER: 1.0, // SHADOW_CLONE: index+middle pressed together on each hand: dist(tip8, tip12) < palm * SC_TOGETHER
+  SC_PERP_COS: 0.45,// SHADOW_CLONE: |cos| between the two finger directions < this (≈ 63°–117°, a "+")
+  SC_AXIS: 0.75,    // SHADOW_CLONE: one pair within ~41° of vertical (|vy|/len > SC_AXIS), the other within ~41° of horizontal
+  SC_CROSS: 0.7,    // SHADOW_CLONE: finger-segment midpoints closer than SC_CROSS * mean finger length (crossing near their middles)
 };
 
 // ar = frame width/height; x is scaled by ar so distances are isotropic (z too, same scale as x).
@@ -119,15 +123,39 @@ function roomMetrics(h) {
 const roomHit = (h) => { const t = [8, 12, 16, 20].map((i) => h.raw[i]).reduce((a, l) => (l.y > a.y ? l : a)); // lowest fingertip
   return { anchor: palmMid(h), anchors: { wrist: { x: h.raw[0].x, y: h.raw[0].y }, mid: { x: h.raw[9].x, y: h.raw[9].y }, tip: { x: t.x, y: t.y } } }; };
 
+// SHADOW_CLONE: two-hand cross seal. fingerSeg = index+middle pair as one segment (knuckle mid -> tip mid), lm space.
+function fingerSeg(h) {
+  const lm = h.lm, a = { x: (lm[5].x + lm[9].x) / 2, y: (lm[5].y + lm[9].y) / 2 }, b = { x: (lm[8].x + lm[12].x) / 2, y: (lm[8].y + lm[12].y) / 2 };
+  const v = { x: b.x - a.x, y: b.y - a.y };
+  return { v, len: Math.hypot(v.x, v.y) || 1e-6, m: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } };
+}
+function scMetrics(h1, h2) {
+  const s1 = fingerSeg(h1), s2 = fingerSeg(h2);
+  const vert = (s) => Math.abs(s.v.y) / s.len > TH.SC_AXIS, horiz = (s) => Math.abs(s.v.x) / s.len > TH.SC_AXIS;
+  return { ok2: h1.twoUp && h2.twoUp,
+    tog: d(h1.lm[8], h1.lm[12]) < h1.palm * TH.SC_TOGETHER && d(h2.lm[8], h2.lm[12]) < h2.palm * TH.SC_TOGETHER,
+    cos: Math.abs(s1.v.x * s2.v.x + s1.v.y * s2.v.y) / (s1.len * s2.len),
+    axis: (vert(s1) && horiz(s2)) || (vert(s2) && horiz(s1)),
+    cross: d(s1.m, s2.m) / ((s1.len + s2.len) / 2),
+    len: (s1.len + s2.len) / 2,
+    c: { x: (s1.m.x + s2.m.x) / 2, y: (s1.m.y + s2.m.y) / 2 } };
+}
+
 // Ordered rule list. Two-hand rules are always evaluated before one-hand rules (sorted below) so a two-hand
 // pose is never read as a one-hand one. match() returns null or { anchor, anchors? } (normalized frame coords).
 // loose() is the hysteresis test used once the gesture is ACTIVE (a looser version of the pose); same return shape.
 const RULES = [
+  { id: 'SHADOW_CLONE', hands: 2,
+    match(h1, h2, F) { const m = scMetrics(h1, h2);
+      if (m.ok2) F.zones.push({ x: m.c.x / F.ar, y: m.c.y, r: m.len, label: 'SC cos ' + m.cos.toFixed(2) + ' ax ' + +m.axis + ' x ' + m.cross.toFixed(2) + ' tog ' + +m.tog });
+      return m.ok2 && m.tog && m.cos < TH.SC_PERP_COS && m.axis && m.cross < TH.SC_CROSS ? { anchor: { x: m.c.x / F.ar, y: m.c.y } } : null; },
+    loose(h1, h2, F) { if (!h1.twoUp || !h2.twoUp) return null; const c = scMetrics(h1, h2).c; return { anchor: { x: c.x / F.ar, y: c.y } }; } },
   { id: 'INSTANT_TRANSMISSION', hands: 1,
     match(h, F) { if (!h.twoUp) return null; const fz = F.forehead(); if (!fz) return null; const R = fz.r * TH.IT_TIP_R; return d(h.lm[8], fz.c) < R && d(h.lm[12], fz.c) < R ? { anchor: tipMid(h) } : null; },
     loose: (h) => h.twoUp ? { anchor: tipMid(h) } : null },
   { id: 'GOJO', hands: 1,
-    match(h) { if (!h.twoUp) return null; const lm = h.lm, t = d(lm[8], lm[12]);
+    // two two-finger hands = a (maybe slightly off) SHADOW_CLONE seal, never one-hand GOJO
+    match(h, F) { if (!h.twoUp || F.hands.filter((x) => x.twoUp).length >= 2) return null; const lm = h.lm, t = d(lm[8], lm[12]);
       const crossed = Math.sign(lm[8].x - lm[12].x) !== Math.sign(lm[5].x - lm[9].x) && t < h.palm * TH.GOJO_CROSS;
       return crossed || t < h.palm * TH.GOJO_TOGETHER ? { anchor: tipMid(h) } : null; },
     loose: (h) => h.twoUp ? { anchor: tipMid(h) } : null },
@@ -182,7 +210,7 @@ window.addEventListener('message', (event) => {
     const raws = hr.landmarks || [];
     const hands = raws.map((raw, i) => prepHand(raw, ar, hr.handedness?.[i]?.[0]?.score ?? 1));
     const P = (l) => ({ x: l.x * ar, y: l.y });
-    const F = { ar, zones: [], _f: undefined, _fz: undefined,
+    const F = { ar, hands, zones: [], _f: undefined, _fz: undefined,
       face() { if (this._f === undefined) this._f = face.detectForVideo(bmp, ts).faceLandmarks?.[0] || null; return this._f; }, // lazy: only when a rule asks
       forehead() {
         if (this._fz !== undefined) return this._fz;

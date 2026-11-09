@@ -625,6 +625,80 @@
     osc('sine', 90, 40, at(0.98), 0.5, 0.35);
   }
 
+  // SHADOW_CLONE timeline (p 0→1 over the hold; reversed on cancel):
+  //  charge 0–0.40   smoke puffs pop and leave silhouette copies of the user (clones 1–3 at p .10/.20/.30)
+  //  build  0.40–0.85 copies multiply (clones 4–6 at p .45/.55/.65), gentle sway
+  //  climax 0.85–1.0 every clone and the real user burst into smoke at once (p .86); smoke clears to the empty background
+  //  end    p = 1    full background plate (user gone) while Leave is clicked
+  // Pure function of p (now only for sway / puff wobble) so cancel replays backwards.
+  const CLONES = [ { dx: -0.14, dy: -0.03, sc: 0.75, t: 0.30 }, { dx: 0.14, dy: -0.03, sc: 0.75, t: 0.65 }, { dx: -0.28, dy: 0.01, sc: 0.88, t: 0.10 }, { dx: 0.28, dy: 0.01, sc: 0.88, t: 0.20 }, { dx: -0.42, dy: 0.04, sc: 1.0, t: 0.45 }, { dx: 0.42, dy: 0.04, sc: 1.0, t: 0.55 } ]; // back→front
+  const PUFF_DUR = 0.07, BURST_AT = 0.86, BURST_DUR = 0.12;
+  const PUFF_OFS = Array.from({ length: 7 }, (_, i) => { const r = mkRnd(100 + i); return Array.from({ length: 12 }, () => ({ a: r() * 6.283, rj: 0.4 + r() * 0.6, rot: r() * 6.283 })); }); // per puff index: 12 sprites
+  let smokeSp = null;
+  function smokeSprite() { // lumpy soft smoke blob, rendered once
+    if (smokeSp) return smokeSp;
+    try { smokeSp = new OffscreenCanvas(128, 128); } catch { smokeSp = document.createElement('canvas'); smokeSp.width = smokeSp.height = 128; }
+    const c = smokeSp.getContext('2d'), r = mkRnd(5);
+    for (let i = 0; i < 7; i++) {
+      const an = r() * 6.283, d = r() * 40, x = 64 + Math.cos(an) * d, y = 64 + Math.sin(an) * d, rr = 20 + r() * 4, g = c.createRadialGradient(x, y, 0, x, y, rr);
+      g.addColorStop(0, 'rgb(255,255,255)'); g.addColorStop(1, 'rgba(230,230,235,0)');
+      c.fillStyle = g; c.fillRect(x - rr, y - rr, rr * 2, rr * 2);
+    }
+    return smokeSp;
+  }
+  function puff(ctx, x, y, size, u, idx, now) { // u = lifetime 0→1
+    if (u <= 0 || u >= 1) return;
+    const e = ease(u), sp = smokeSprite(), sz = size * (0.5 + 0.9 * e), dist = size * 0.6 * e;
+    ctx.save(); ctx.globalAlpha = (u < 0.15 ? u / 0.15 : 1 - (u - 0.15) / 0.85) * 0.9;
+    for (const q of PUFF_OFS[idx]) {
+      ctx.save(); ctx.translate(x + Math.cos(q.a) * dist * q.rj, y + Math.sin(q.a) * dist * q.rj); ctx.rotate(q.rot + now * 0.0005);
+      ctx.drawImage(sp, -sz / 2, -sz / 2, sz, sz); ctx.restore();
+    }
+    ctx.restore();
+  }
+  function fxClone(ctx, f, p, a, s) {
+    const W = f.w, H = f.h, now = f.now, tc = f.tmp.getContext('2d');
+    if (p <= 0) return;
+    const plate = plateImg?.complete && plateImg.naturalWidth ? plateImg : null;
+    const showPlate = (masked) => { // plate (brightness-matched) or blurred camera; masked = only inside the person
+      if (plate && !S.gain) S.gain = lum(f.video) / Math.max(1, lum(plate));
+      const c = masked ? tc : ctx;
+      if (masked) { tc.globalCompositeOperation = 'source-over'; tc.clearRect(0, 0, W, H); }
+      c.filter = plate ? `brightness(${S.gain || 1})` : 'blur(40px)';
+      c.drawImage(plate || f.video, 0, 0, W, H); c.filter = 'none';
+      if (masked) { tc.globalCompositeOperation = 'destination-in'; tc.drawImage(maskHard, 0, 0, W, H); tc.globalCompositeOperation = 'source-over'; ctx.drawImage(f.tmp, 0, 0); }
+    };
+    if (p >= 1) return showPlate(false);
+    const X = S.cx * W, Fy = H, sy = (c) => H - 0.45 * H * c.sc + c.dy * H; // clone torso y (0.55H scaled about the feet, then shifted)
+    if (p < BURST_AT + 0.02) {
+      const fade = 1 - seg(p, BURST_AT, BURST_AT + 0.02);
+      const al = CLONES.map((c) => ease(seg(p, c.t + PUFF_DUR * 0.35, c.t + PUFF_DUR)) * fade * 0.97);
+      if (haveMask && al.some((x) => x > 0.003)) {
+        tc.globalCompositeOperation = 'source-over'; tc.clearRect(0, 0, W, H); tc.drawImage(f.video, 0, 0, W, H);
+        tc.globalCompositeOperation = 'destination-in'; tc.drawImage(maskHard, 0, 0, W, H); tc.globalCompositeOperation = 'source-over';
+        CLONES.forEach((c, k) => {
+          if (al[k] <= 0.003) return;
+          ctx.save(); ctx.globalAlpha = al[k];
+          ctx.translate(c.dx * W + Math.sin(now / 700 + k) * 0.004 * W, c.dy * H); ctx.translate(X, Fy); ctx.scale(c.sc, c.sc); ctx.translate(-X, -Fy);
+          ctx.drawImage(f.tmp, 0, 0); ctx.restore();
+        });
+        ctx.drawImage(f.tmp, 0, 0); // real user stays in front
+      }
+      CLONES.forEach((c, k) => puff(ctx, X + c.dx * W, sy(c), 0.32 * H * c.sc, seg(p, c.t, c.t + PUFF_DUR), k, now));
+    } else showPlate(haveMask && p < BURST_AT + 0.08);
+    if (p >= BURST_AT - 0.005) {
+      const uB = seg(p, BURST_AT, BURST_AT + BURST_DUR);
+      CLONES.forEach((c, k) => puff(ctx, X + c.dx * W, sy(c), 0.45 * H * c.sc, uB, k, now));
+      puff(ctx, X, 0.55 * H, 0.55 * H, uB, 6, now);
+    }
+  }
+  function soundClone(b) {
+    const { node, osc, noise, holdS } = b, at = (p) => p * holdS;
+    for (const c of CLONES) { const t = at(c.t); noise(t, 0.25, node('lowpass', 700), 0.45); osc('sine', 190, 60, t, 0.16, 0.25); } // soft poofs
+    const t = at(BURST_AT);
+    noise(t, 0.9, node('lowpass', 1000), 0.8); osc('sine', 130, 38, t, 0.45, 0.5); noise(t, 0.5, node('highpass', 3000), 0.15); // big puff + airy hiss
+  }
+
   // Effect registry. draw(ctx, frame, progress, anchor, state):
   //   frame = { w, h, video, tmp, now }; progress 0→1 over the hold (runs backwards while CANCELLING, 1 while LEAVING);
   //   anchor = smoothed primary anchor {x,y} in normalized output coords (detector frames are a downscale of the same,
@@ -659,6 +733,7 @@
         }
       } },
     ROOM: { id: 'ROOM', label: 'Room (dome)', needsMask: true, needsBackgroundPlate: true, defaultAnchor: { x: 0.5, y: 0.45 }, draw: fxRoom, sound: soundRoom },
+    SHADOW_CLONE: { id: 'SHADOW_CLONE', label: 'Shadow clone', needsMask: true, needsBackgroundPlate: true, defaultAnchor: { x: 0.5, y: 0.5 }, draw: fxClone, sound: soundClone },
   };
 
   function renderFx(ctx, w, h, video, tmp, now) {
