@@ -77,6 +77,7 @@ Gesture thresholds (`TH`, ratios of hand/face size, so scale-invariant):
 | `SC_TOGETHER` | `1.0` | Shadow Clone: index+middle pressed together on each hand, `dist(tip8, tip12) < palm × SC_TOGETHER` |
 | `SC_PERP_COS` | `0.45` | Shadow Clone: `\|cos\|` between the two finger directions below this (≈ 63°–117°, a "+") |
 | `SC_AXIS` | `0.75` | Shadow Clone: one pair within ~41° of vertical, the other within ~41° of horizontal |
+| `SC_NEAR` | `3` | Shadow Clone / Gojo: a second hand with its wrist within `SC_NEAR × hand size` counts as a seal attempt and blocks Gojo. In the seal, the partly hidden hand only needs its index up (ring + pinky curled); the other needs the full two-finger pose |
 | `SC_CROSS` | `0.7` | Shadow Clone: finger-segment midpoints closer than `SC_CROSS × mean finger length` |
 
 ---
@@ -120,7 +121,7 @@ Teams' CSP blocks wasm compilation in the page, so MediaPipe runs in an extensio
 Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected). Rules live in an ordered `RULES` list in `detector.js`; two-hand rules are evaluated before one-hand rules, the first match wins, and each rule has a `match()` plus a looser `loose()` for hysteresis. All thresholds live in `TH`.
 - finger extended: `dist(tip, wrist) > dist(pip, wrist) × 1.1`
 - **Instant Transmission**: index + middle up, ring + pinky down, both tips inside the forehead zone (face landmarks 10/151, radius from face width)
-- **Gojo**: same finger pose, tips crossed (left/right order swapped vs. knuckles) or pressed together. Ignored when two two-finger hands are visible, so a slightly-off cross seal never reads as Gojo
+- **Gojo**: same finger pose, tips crossed (left/right order swapped vs. knuckles) or pressed together. Ignored when another hand's wrist is within `SC_NEAR × hand size`, so a cross seal (even with one hand partly hidden) never reads as Gojo
 - **Shadow Clone**: two hands, each index+middle up and pressed together; each pair is one segment (knuckle mid to tip mid), the two are near-perpendicular (`|cos|`), one near-vertical and one near-horizontal, and cross near their middles
 - **Room**: palm normal `(lm5−lm0)×(lm17−lm0)` mostly vertical (`|ny|`, orientation-agnostic), ≥3 fingertips below their knuckles (palm-down bowl, not palm-up cup), fingers fanned (`tip8↔tip20` vs `mcp5↔mcp17`), thumb spread, wrist not in the bottom `LOW_ZONE`
 
