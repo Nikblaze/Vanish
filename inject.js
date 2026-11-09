@@ -456,22 +456,30 @@
   }
 
   // ROOM timeline (p = progress 0→1 over the hold; reversed on cancel):
-  //  charge 0–0.40   water droplets/streams spiral in from the surroundings into the cupped palm; a blue water orb grows there
-  //  build  0.40–0.85 deep-blue translucent room with a ragged edge expands from the orb past the frame (0.40–0.85),
-  //                  glowing horizontal water streaks and ripple rings inside, soft ring distortion at the edge; orb keeps pulsing
-  //  climax 0.85–1.0 frame cut into a tile grid; user tiles swap with background tiles and scatter, tiles drift into black
+  //  charge 0–0.40   rotating ring of air/dust particles under the palm
+  //  build  0.40–0.85 translucent cyan dome forms under the palm (0.40–0.55), then expands past the frame (0.55–0.85):
+  //                  cool tint inside, bright rim, faint lattice, ring-shaped distortion at the rim
+  //  climax 0.85–1.0 frame cut into a tile grid; tiles split (q 0–.35), user tiles swap with other tiles and the vacated
+  //                  homes show the background plate (q .35–.6), scattered user tiles flip to plate (q .6–.75), all tiles
+  //                  drift apart into black (q .75–1)
   //  end    p = 1    black frame while Leave is clicked
   const seg = (p, a, b) => Math.min(1, Math.max(0, (p - a) / (b - a)));
   const ROOM_COLS = 6, ROOM_ROWS = 4;
-  const ROOM_PTS = Array.from({ length: 80 }, () => ({ a0: rnd() * 6.283, R0: 0.35 + rnd() * 0.55, ph: rnd(), sp: 0.5 + rnd() * 0.7, w: 1.5 + rnd() * 2 }));
-  const ROOM_STR = Array.from({ length: 6 }, () => ({ y0: 0.15 + rnd() * 0.75, amp: 0.01 + rnd() * 0.02, k: 2 + rnd() * 3, sp: 0.6 + rnd() * 0.8, len: 0.4 + rnd() * 0.5, x0: rnd() }));
-  const ROOM_RIP = Array.from({ length: 8 }, () => ({ x: rnd(), y: rnd(), ph: rnd() }));
-  const blob = (ctx, x, y, n, rad) => { // closed smooth path through n points on radius rad(theta)
-    const pt = Array.from({ length: n }, (_, i) => { const t = (i / n) * 6.2832, r = rad(t); return { x: x + Math.cos(t) * r, y: y + Math.sin(t) * r }; });
-    ctx.beginPath(); ctx.moveTo((pt[n - 1].x + pt[0].x) / 2, (pt[n - 1].y + pt[0].y) / 2);
-    for (let i = 0; i < n; i++) { const q = pt[(i + 1) % n]; ctx.quadraticCurveTo(pt[i].x, pt[i].y, (pt[i].x + q.x) / 2, (pt[i].y + q.y) / 2); }
-    ctx.closePath();
-  };
+  const ROOM_PTS = Array.from({ length: 140 }, (_, i) => ({ a0: rnd() * 6.283, j: 0.85 + rnd() * 0.3, sz: 1.5 + rnd() * 2, sp: 0.7 + rnd() * 0.8, L: [0.7, 1, 1.3][i % 3] }));
+  let roomLat = null;
+  function roomLattice() { // unit sphere wireframe, rendered once
+    if (roomLat) return roomLat;
+    try { roomLat = new OffscreenCanvas(512, 512); } catch { roomLat = document.createElement('canvas'); roomLat.width = roomLat.height = 512; }
+    const c = roomLat.getContext('2d');
+    c.strokeStyle = 'rgba(170,240,255,0.5)'; c.lineWidth = 2;
+    c.beginPath(); c.arc(256, 256, 250, 0, 7); c.stroke();
+    for (let k = 0; k <= 6; k++) { c.beginPath(); c.ellipse(256, 256, 250 * Math.cos(k * Math.PI / 14), 250, 0, 0, 7); c.stroke(); }
+    for (let j = 1; j <= 6; j++) for (const sg of [-1, 1]) {
+      const dy = 250 * Math.sin(j * Math.PI / 14) * sg, hw = Math.sqrt(250 * 250 - dy * dy);
+      c.beginPath(); c.moveTo(256 - hw, 256 + dy); c.lineTo(256 + hw, 256 + dy); c.stroke();
+    }
+    return roomLat;
+  }
   function roomBuild(f, W, H, m) { // one-off per climax: plate, frozen frame, per-tile user flags, swap pairs
     const mk = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; };
     const plate = mk(), pc = plate.getContext('2d');
@@ -479,9 +487,9 @@
     else { pc.filter = 'blur(30px)'; pc.drawImage(f.video, 0, 0, W, H); }
     pc.filter = 'none';
     const src = mk(); src.getContext('2d').drawImage(f.video, 0, 0, W, H);
-    for (const c of [pc, src.getContext('2d')]) { // keep the room's deep-blue tint so the room→tiles cut doesn't pop
-      c.fillStyle = 'rgba(25,60,190,0.32)'; c.fillRect(0, 0, W, H);
-      c.globalCompositeOperation = 'multiply'; c.fillStyle = 'rgba(10,30,110,0.25)'; c.fillRect(0, 0, W, H); c.globalCompositeOperation = 'source-over';
+    for (const c of [pc, src.getContext('2d')]) { // keep the dome's cool tint so the dome→tiles cut doesn't pop
+      c.fillStyle = 'rgba(70,190,255,0.13)'; c.fillRect(0, 0, W, H);
+      c.globalCompositeOperation = 'multiply'; c.fillStyle = 'rgba(0,40,80,0.12)'; c.fillRect(0, 0, W, H); c.globalCompositeOperation = 'source-over';
     }
     const n = ROOM_COLS * ROOM_ROWS, user = [];
     let md = null;
@@ -519,81 +527,57 @@
     if (p <= 0) return;
     if (p >= 1) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); return; }
     if (p >= 0.85) return roomClimax(ctx, f, seg(p, 0.85, 1), s.mem);
-    const wr = s.anchors.wrist, md = s.anchors.mid;
+    const P = { x: a.x * W, y: a.y * H }, wr = s.anchors.wrist, md = s.anchors.mid;
     const hs = Math.min(H * 0.3, Math.max(H * 0.06, wr && md ? Math.hypot((md.x - wr.x) * W, (md.y - wr.y) * H) : H * 0.12));
-    const O = { x: a.x * W, y: a.y * H - 0.35 * hs }, rOrb = 0.55 * hs;
-    const Rmax = Math.hypot(Math.max(O.x, W - O.x), Math.max(O.y, H - O.y)) * 1.05;
-    const vis = seg(p, 0, 0.08) * (1 - seg(p, 0.45, 0.55));
-    if (vis > 0) { // inflow: streaks spiral from the surroundings into the palm
-      const nP = 80 * seg(p, 0, 0.3) + 20, mx = Math.max(W, H);
-      const pos = (q, u) => { const r = rOrb + (q.R0 * mx - rOrb) * (1 - u) ** 2, an = q.a0 + 2.2 * u; return [O.x + Math.cos(an) * r, O.y + Math.sin(an) * r]; };
-      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
-      ROOM_PTS.forEach((q, k) => {
-        if (k >= nP) return;
-        const u = (now * 0.00035 * q.sp + q.ph) % 1, [x1, y1] = pos(q, u), [x0, y0] = pos(q, Math.max(0, u - 0.03));
-        ctx.strokeStyle = `rgba(120,200,255,${vis * u * 0.9})`; ctx.lineWidth = q.w * (0.5 + u);
-        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
-      });
-      ctx.restore();
-    }
-    if (p >= 0.4) { // room
-      const grow = ease(seg(p, 0.4, 0.85)), A = seg(p, 0.4, 0.5), R = rOrb * 1.2 + (Rmax - rOrb * 1.2) * grow;
-      const edge = (t) => R * (1 + 0.035 * Math.sin(7 * t + now / 400) + 0.025 * Math.sin(13 * t - now / 300));
-      ctx.save();
-      if (R < Rmax) { // ring-shaped lens distortion at the edge
-        const band = Math.max(12, R * 0.05);
+    const rx = hs * (1.4 + 1.0 * ease(seg(p, 0, 0.4))), ry = rx * 0.32, tip = s.anchors.tip;
+    const C = { x: P.x, y: Math.max(P.y + 0.9 * hs, tip ? tip.y * H + ry * 1.3 + 0.15 * hs : 0) }; // ring sits below the fingertips
+    const Rmax = Math.hypot(Math.max(C.x, W - C.x), Math.max(C.y, H - C.y)) * 1.05;
+    if (p < 0.6) { // charge: fast air vortex — 3 orbit layers of dust streaks, thick wind arcs, haze
+      const al = seg(p, 0, 0.08) * (1 - seg(p, 0.5, 0.6)), w = now * 0.012;
+      if (al > 0) {
         ctx.save();
-        ctx.beginPath(); ctx.arc(O.x, O.y, R + band, 0, 7); ctx.moveTo(O.x + Math.max(0, R - band), O.y); ctx.arc(O.x, O.y, Math.max(0, R - band), 0, 7);
-        ctx.clip('evenodd');
-        ctx.translate(O.x, O.y); ctx.scale(1.03, 1.03); ctx.translate(-O.x, -O.y);
-        ctx.drawImage(ctx.canvas, 0, 0);
+        ctx.save(); ctx.translate(C.x, C.y); ctx.scale(1, 0.32); glow(ctx, 0, 0, rx * 1.15, `rgba(190,235,255,${0.2 * al})`); ctx.restore();
+        ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+        for (let k = 0; k < 6; k++) { // wind arcs, alternating layers
+          const L = [0.8, 1.15][k % 2], st = w * (k % 2 ? 0.8 : 1.25) + k * 1.047;
+          ctx.strokeStyle = `rgba(120,210,255,${0.15 * al})`; ctx.lineWidth = 10; ctx.beginPath(); ctx.ellipse(C.x, C.y, rx * L, ry * L, 0, st, st + 1.6); ctx.stroke();
+          ctx.strokeStyle = `rgba(215,245,255,${0.55 * al})`; ctx.lineWidth = 2.5; ctx.stroke();
+        }
+        for (const q of ROOM_PTS) { // dust streaks: short arcs along the orbit, back half dimmer
+          const an = q.a0 + w * q.sp * (1.6 - q.L * 0.6), sn = Math.sin(an);
+          ctx.strokeStyle = `rgba(215,245,255,${al * (sn > 0 ? 0.95 : 0.35)})`; ctx.lineWidth = q.sz;
+          ctx.beginPath(); ctx.ellipse(C.x, C.y, rx * q.L * q.j, ry * q.L * q.j, 0, an - 0.22, an); ctx.stroke();
+        }
         ctx.restore();
       }
+    }
+    if (p < 0.4) return;
+    const form = seg(p, 0.4, 0.55), grow = ease(seg(p, 0.55, 0.85)), A = form;
+    const R = hs * 1.2 * (0.3 + 0.7 * form) + (Rmax - hs * 1.2) * grow;
+    ctx.save();
+    if (grow > 0 && R < Rmax) { // ring-shaped lens distortion at the rim
+      const band = Math.max(12, R * 0.06);
       ctx.save();
-      blob(ctx, O.x, O.y, 48, edge); ctx.clip();
-      ctx.fillStyle = `rgba(25,60,190,${0.32 * A})`; ctx.fillRect(0, 0, W, H);
-      ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = `rgba(10,30,110,${0.25 * A})`; ctx.fillRect(0, 0, W, H);
-      ctx.globalCompositeOperation = 'source-over';
-      const g = ctx.createRadialGradient(O.x, O.y, 0, O.x, O.y, R);
-      g.addColorStop(0.6, 'rgba(60,120,255,0)'); g.addColorStop(1, `rgba(10,25,120,${0.35 * A})`);
-      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-      ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      for (const q of ROOM_STR) { // glowing horizontal water streaks, sliding sideways
-        const len = q.len * W, st = ((q.x0 * (W + len) + now * 0.05 * q.sp) % (W + len)) - len;
-        ctx.beginPath();
-        for (let i = 0; i <= 40; i++) { const x = st + (len * i) / 40, y = q.y0 * H + q.amp * H * Math.sin(q.k * 6.2832 * x / W + now * 0.002 * q.sp); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
-        ctx.strokeStyle = `rgba(90,170,255,${0.18 * A})`; ctx.lineWidth = 8; ctx.stroke();
-        ctx.strokeStyle = `rgba(225,245,255,${0.75 * A})`; ctx.lineWidth = 2; ctx.stroke();
-      }
-      ctx.lineWidth = 1.5;
-      for (const q of ROOM_RIP) { // ripple rings
-        const x = q.x * W, y = q.y * H, c = (now * 0.0006 + q.ph) % 1;
-        if (Math.hypot(x - O.x, y - O.y) > R) continue;
-        const rx = 4 + 26 * c;
-        ctx.strokeStyle = `rgba(180,225,255,${0.6 * A * (1 - c)})`;
-        ctx.beginPath(); ctx.ellipse(x, y, rx, rx * 0.35, 0, 0, 7); ctx.stroke();
-      }
-      ctx.restore();
-      if (R < Rmax) { // edge highlight
-        ctx.globalCompositeOperation = 'lighter'; ctx.strokeStyle = `rgba(120,190,255,${0.5 * A})`; ctx.lineWidth = 3;
-        blob(ctx, O.x, O.y, 48, edge); ctx.stroke();
-      }
+      ctx.beginPath(); ctx.arc(C.x, C.y, R + band, 0, 7); ctx.moveTo(C.x + Math.max(0, R - band), C.y); ctx.arc(C.x, C.y, Math.max(0, R - band), 0, 7);
+      ctx.clip('evenodd');
+      ctx.translate(C.x, C.y); ctx.scale(1.035, 1.035); ctx.translate(-C.x, -C.y);
+      ctx.drawImage(ctx.canvas, 0, 0);
       ctx.restore();
     }
-    const r = rOrb * ease(seg(p, 0.02, 0.4)) * (1 + 0.04 * Math.sin(now / 180)); // water orb
-    if (p > 0.02 && r >= 1) {
-      ctx.save();
-      blob(ctx, O.x, O.y, 28, (t) => r * (1 + 0.06 * Math.sin(3 * t + now / 260) + 0.04 * Math.sin(5 * t - now / 190)));
-      const g = ctx.createRadialGradient(O.x - 0.3 * r, O.y - 0.35 * r, 0, O.x, O.y, r);
-      g.addColorStop(0, 'rgba(220,245,255,0.95)'); g.addColorStop(0.35, 'rgba(90,170,255,0.85)'); g.addColorStop(0.8, 'rgba(20,80,210,0.8)'); g.addColorStop(1, 'rgba(10,40,150,0.6)');
-      ctx.fillStyle = g; ctx.fill();
-      ctx.globalCompositeOperation = 'lighter'; ctx.strokeStyle = 'rgba(200,240,255,0.5)'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(O.x, O.y, 0.6 * r, now / 700, now / 700 + 2); ctx.stroke();
-      ctx.beginPath(); ctx.arc(O.x, O.y, 0.4 * r, -now / 500, -now / 500 + 1.6); ctx.stroke();
-      ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.beginPath(); ctx.ellipse(O.x - 0.35 * r, O.y - 0.45 * r, 0.25 * r, 0.12 * r, -0.5, 0, 7); ctx.fill();
-      glow(ctx, O.x, O.y, 1.8 * r, 'rgba(80,170,255,0.35)');
-      ctx.restore();
+    ctx.save(); // inside: cool tint + lattice
+    ctx.beginPath(); ctx.arc(C.x, C.y, R, 0, 7); ctx.clip();
+    ctx.fillStyle = `rgba(70,190,255,${0.13 * A})`; ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = `rgba(0,40,80,${0.12 * A})`; ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 0.35 * A;
+    ctx.translate(C.x, C.y); ctx.rotate(now * 0.0002);
+    ctx.drawImage(roomLattice(), -R, -R, 2 * R, 2 * R);
+    ctx.restore();
+    if (R < Rmax) { // rim, no shadowBlur
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = `rgba(80,210,255,${0.25 * A})`; ctx.lineWidth = 10; ctx.beginPath(); ctx.arc(C.x, C.y, R, 0, 7); ctx.stroke();
+      ctx.strokeStyle = `rgba(220,250,255,${0.9 * A})`; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(C.x, C.y, R, 0, 7); ctx.stroke();
     }
+    ctx.restore();
   }
   function roomClimax(ctx, f, q, m) {
     const W = f.w, H = f.h, now = f.now;
@@ -630,18 +614,13 @@
     const { ac, T, out, go, node, gain, osc, noise, holdS } = b, at = (p) => p * holdS;
     const nb = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate), nd = nb.getChannelData(0);
     for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
-    const wat = ac.createBufferSource(), bp = node('bandpass', 800), env = gain(0, out), lfo = ac.createOscillator(); // water gather
-    wat.buffer = nb; wat.loop = true; bp.Q.value = 4; wat.connect(bp).connect(env);
-    env.gain.setValueAtTime(0, T); env.gain.linearRampToValueAtTime(0.18, T + at(0.15)); env.gain.setValueAtTime(0.18, T + at(0.4)); env.gain.linearRampToValueAtTime(0.0001, T + at(0.5));
-    lfo.frequency.value = 3.5; lfo.connect(gain(400, bp.frequency));
-    go(wat, 0, at(0.5)); go(lfo, 0, at(0.5));
-    const rj = mkRnd(11);
-    for (let i = 0; i < 14; i++) { const r = rj(); osc('sine', 260 + 200 * r, 700 + 500 * r, at(0.02 + 0.4 * (i / 14) ** 0.8) + rj() * 0.05, 0.06, 0.12); } // bloops
-    const he = gain(0, out), tg = gain(0.05, he), ho = ac.createOscillator(), tl = ac.createOscillator(); // orb hum
-    ho.type = 'sine'; ho.frequency.value = 196; ho.connect(tg); tl.frequency.value = 5; tl.connect(gain(0.04, tg.gain));
-    he.gain.setValueAtTime(0, T); he.gain.linearRampToValueAtTime(1, T + at(0.3)); he.gain.setValueAtTime(1, T + at(0.85)); he.gain.linearRampToValueAtTime(0.0001, T + at(0.88));
-    go(ho, 0, at(0.88)); go(tl, 0, at(0.88));
-    osc('sine', 70, 45, at(0.4), 1.6, 0.45); noise(at(0.4), 1.5, node('lowpass', 400), 0.3); // room swell
+    const wind = ac.createBufferSource(), bp = node('bandpass', 500), env = gain(0, out), lfo = ac.createOscillator();
+    wind.buffer = nb; wind.loop = true; bp.Q.value = 1.2; wind.connect(bp).connect(env);
+    env.gain.setValueAtTime(0, T); env.gain.linearRampToValueAtTime(0.38, T + at(0.25)); env.gain.setValueAtTime(0.38, T + at(0.6)); env.gain.linearRampToValueAtTime(0.0001, T + at(0.9));
+    lfo.frequency.value = 2.2; lfo.connect(gain(350, bp.frequency)); // fast swirl
+    go(wind, 0, at(0.92)); go(lfo, 0, at(0.92));
+    osc('sine', 75, 42, at(0.55), 1.4, 0.5); osc('triangle', 150, 90, at(0.55), 1.0, 0.12);
+    noise(at(0.55), 1.2, node('lowpass', 300), 0.35);
     for (let i = 0; i < 10; i++) { const t = at(0.85 + i * 0.012); noise(t, 0.035, node('bandpass', 4500 + i * 300), 0.45); osc('square', 3200, 1600, t, 0.04, 0.06); }
     osc('sine', 90, 40, at(0.98), 0.5, 0.35);
   }
@@ -679,7 +658,7 @@
           go(o, 0, life); go(l, 0, life);
         }
       } },
-    ROOM: { id: 'ROOM', label: 'Room (water orb)', needsMask: true, needsBackgroundPlate: true, defaultAnchor: { x: 0.5, y: 0.6 }, draw: fxRoom, sound: soundRoom },
+    ROOM: { id: 'ROOM', label: 'Room (dome)', needsMask: true, needsBackgroundPlate: true, defaultAnchor: { x: 0.5, y: 0.45 }, draw: fxRoom, sound: soundRoom },
   };
 
   function renderFx(ctx, w, h, video, tmp, now) {

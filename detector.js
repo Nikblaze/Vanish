@@ -83,16 +83,16 @@ const TH = {
   GOJO_CROSS: 1.5,    // GOJO crossed: tip order swapped vs knuckles AND tips within palm * GOJO_CROSS
   GOJO_TOGETHER: 0.9, // GOJO together: dist(tip8, tip12) < palm * GOJO_TOGETHER (palm = dist(lm5, lm9))
   LOW_ZONE: 0.25,        // shared: gestures need the wrist above the bottom LOW_ZONE of the frame (no desk/typing hands)
-  // ROOM palm normal = (lm5-lm0) x (lm17-lm0) in aspect-corrected 3D. |ny| high = palm plane horizontal (up or down, no
-  // handedness needed). "Tips risen above MCPs" selects the palm-up cup over palm-down; ROOM_OPEN rejects a palm-up fist;
-  // a flat open palm-up (shrug) fails TIP_RISE.
-  ROOM_NY: 0.55,       // ROOM: |palm normal . y| / |normal| — palm plane roughly horizontal
-  ROOM_NY_LOOSE: 0.4,  // ROOM hysteresis
-  ROOM_TIP_RISE: 0.15, // ROOM: fingertip above its MCP by > ROOM_TIP_RISE * hs (fingers curled up into a cup)
-  ROOM_TIPS_UP: 3,     // ROOM: at least this many of index..pinky tips risen
-  ROOM_OPEN: 0.6,      // ROOM: mean dist(tip, palm centre) of index..pinky > ROOM_OPEN * hs — claw, not a fist
-  ROOM_SPREAD: 1.2,    // ROOM: dist(tip8, tip20) > ROOM_SPREAD * dist(mcp5, mcp17) — fingers fanned
-  ROOM_THUMB: 0.5,     // ROOM: thumb spread — dist(tip4, mcp5) > ROOM_THUMB * hs
+  // ROOM palm normal = (lm5-lm0) x (lm17-lm0) in aspect-corrected 3D. We use |ny| (orientation-agnostic, no handedness
+  // needed): palm facing camera puts the normal on z, sideways on x, palm up/down on y. "Tips below MCPs" then
+  // separates palm-down (bowl) from palm-up (cup).
+  ROOM_EXT: 1.0,         // ROOM: looser finger-extended ratio (fingers are curved down into a bowl)
+  ROOM_NY: 0.55,         // ROOM: |palm normal . y| / |normal| — palm plane roughly horizontal (palm down)
+  ROOM_NY_LOOSE: 0.4,    // ROOM hysteresis
+  ROOM_TIP_DROP: 0.1,    // ROOM: fingertip must be below its MCP by > ROOM_TIP_DROP * hs (curved down)
+  ROOM_TIPS_DOWN: 3,     // ROOM: at least this many of index..pinky tips dropped
+  ROOM_SPREAD: 1.3,      // ROOM: dist(tip8, tip20) > ROOM_SPREAD * dist(mcp5, mcp17) — fingers fanned
+  ROOM_THUMB: 0.5,       // ROOM: thumb spread — dist(tip4, mcp5) > ROOM_THUMB * hs
 };
 
 // ar = frame width/height; x is scaled by ar so distances are isotropic (z too, same scale as x).
@@ -108,17 +108,16 @@ function roomMetrics(h) {
   if (h._room) return h._room;
   const lm = h.lm, a = { x: lm[5].x - lm[0].x, y: lm[5].y - lm[0].y, z: lm[5].z - lm[0].z }, b = { x: lm[17].x - lm[0].x, y: lm[17].y - lm[0].y, z: lm[17].z - lm[0].z };
   const n = { x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x };
-  const pc = [0, 5, 9, 13, 17].reduce((o, i) => ({ x: o.x + lm[i].x / 5, y: o.y + lm[i].y / 5 }), { x: 0, y: 0 }), tips = [8, 12, 16, 20];
   return (h._room = {
     ny: Math.abs(n.y) / (Math.hypot(n.x, n.y, n.z) || 1),
-    ups: [[8, 5], [12, 9], [16, 13], [20, 17]].filter(([t, m]) => lm[t].y < lm[m].y - TH.ROOM_TIP_RISE * h.hs).length,
-    open: tips.reduce((s, t) => s + d(lm[t], pc), 0) / 4 / (h.hs || 1),
+    drops: [[8, 5], [12, 9], [16, 13], [20, 17]].filter(([t, m]) => lm[t].y > lm[m].y + TH.ROOM_TIP_DROP * h.hs).length,
     spread: d(lm[8], lm[20]) / (d(lm[5], lm[17]) || 1),
     thumb: d(lm[4], lm[5]) / (h.hs || 1),
+    nExt: [[8, 6], [12, 10], [16, 14], [20, 18]].filter(([t, p]) => h.extK(t, p, TH.ROOM_EXT)).length,
     low: h.raw[0].y > 1 - TH.LOW_ZONE });
 }
-const roomCup = (h) => { const p = palmMid(h), t = [4, 8, 12, 16, 20].map((i) => h.raw[i]); return { x: (p.x + t.reduce((a, l) => a + l.x, 0) / 5) / 2, y: (p.y + t.reduce((a, l) => a + l.y, 0) / 5) / 2 }; };
-const roomHit = (h) => ({ anchor: roomCup(h), anchors: { wrist: { x: h.raw[0].x, y: h.raw[0].y }, mid: { x: h.raw[9].x, y: h.raw[9].y } } });
+const roomHit = (h) => { const t = [8, 12, 16, 20].map((i) => h.raw[i]).reduce((a, l) => (l.y > a.y ? l : a)); // lowest fingertip
+  return { anchor: palmMid(h), anchors: { wrist: { x: h.raw[0].x, y: h.raw[0].y }, mid: { x: h.raw[9].x, y: h.raw[9].y }, tip: { x: t.x, y: t.y } } }; };
 
 // Ordered rule list. Two-hand rules are always evaluated before one-hand rules (sorted below) so a two-hand
 // pose is never read as a one-hand one. match() returns null or { anchor, anchors? } (normalized frame coords).
@@ -134,9 +133,9 @@ const RULES = [
     loose: (h) => h.twoUp ? { anchor: tipMid(h) } : null },
   { id: 'ROOM', hands: 1,
     match(h, F) { const m = roomMetrics(h);
-      if (m.ups >= 2) { const c = roomCup(h); F.zones.push({ x: c.x, y: c.y, r: h.hs, label: 'ROOM ny ' + m.ny.toFixed(2) + ' up ' + m.ups + ' op ' + m.open.toFixed(2) + ' sp ' + m.spread.toFixed(2) + ' th ' + m.thumb.toFixed(2) }); }
-      return !m.low && m.ny > TH.ROOM_NY && m.ups >= TH.ROOM_TIPS_UP && m.open > TH.ROOM_OPEN && m.spread > TH.ROOM_SPREAD && m.thumb > TH.ROOM_THUMB ? roomHit(h) : null; },
-    loose(h) { const m = roomMetrics(h); return !m.low && m.ny > TH.ROOM_NY_LOOSE && m.ups >= 2 && m.open > TH.ROOM_OPEN * 0.8 ? roomHit(h) : null; } },
+      if (m.nExt >= 3) { const c = palmMid(h); F.zones.push({ x: c.x, y: c.y, r: h.hs, label: 'ROOM ny ' + m.ny.toFixed(2) + ' sp ' + m.spread.toFixed(2) + ' th ' + m.thumb.toFixed(2) + ' dn ' + m.drops }); }
+      return !m.low && m.nExt === 4 && m.ny > TH.ROOM_NY && m.drops >= TH.ROOM_TIPS_DOWN && m.spread > TH.ROOM_SPREAD && m.thumb > TH.ROOM_THUMB ? roomHit(h) : null; },
+    loose(h) { const m = roomMetrics(h); return !m.low && m.ny > TH.ROOM_NY_LOOSE && m.nExt >= 3 ? roomHit(h) : null; } },
 ].sort((a, b) => b.hands - a.hands); // stable: two-hand first, otherwise list order
 
 // hands = prepped list, off = Set of disabled ids. Also returns `loose`: hysteresis matches for every enabled rule.

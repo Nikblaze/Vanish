@@ -8,7 +8,7 @@ Works on **Microsoft Teams web** (`teams.microsoft.com`, `teams.live.com`, `team
 |---|---|
 | Index + middle finger on your forehead | **Instant Transmission**: fingertip glow, flicker, you vanish from the frame |
 | Index + middle crossed (or pressed together), hand raised | **Domain Expansion**: black void expands from your hand, starfield, everything goes dark |
-| **Room**: one hand palm up, fingers curled upward like holding an orb, hand above the bottom quarter of the frame | **Room**: water gathers into a blue orb in your palm, a deep-blue room expands with flowing water streaks, frame is sliced into tiles, you get scattered, tiles drift apart into black. Needs captured background |
+| **Room**: one hand palm-down, all five fingers spread and curved down like an upside-down bowl, hand above the bottom quarter of the frame | **Room**: particle ring, cyan dome expands past the frame, frame is sliced into tiles, you get scattered, tiles drift apart into black. Needs captured background |
 
 All visuals and sounds are generated in code. No third-party character art, clips, or audio are included.
 
@@ -66,12 +66,12 @@ Gesture thresholds (`TH`, ratios of hand/face size, so scale-invariant):
 | `GOJO_CROSS` | `1.5` | Gojo crossed: tips swapped vs knuckles and within `palm × GOJO_CROSS` |
 | `GOJO_TOGETHER` | `0.9` | Gojo together: `dist(tip8, tip12) < palm × GOJO_TOGETHER` |
 | `LOW_ZONE` | `0.25` | shared: gestures need the wrist above the bottom `LOW_ZONE` of the frame (no desk/typing hands) |
-| `ROOM_NY` | `0.55` | Room: `\|palm normal · y\| / \|normal\|`, palm plane roughly horizontal (up or down) |
+| `ROOM_EXT` | `1.0` | Room: looser finger-extended ratio (fingers curve down into a bowl) |
+| `ROOM_NY` | `0.55` | Room: `\|palm normal · y\| / \|normal\|`, palm plane roughly horizontal (palm down) |
 | `ROOM_NY_LOOSE` | `0.4` | Room hysteresis |
-| `ROOM_TIP_RISE` | `0.15` | Room: fingertip above its MCP by more than `ROOM_TIP_RISE × hand size` (fingers curled up into a cup) |
-| `ROOM_TIPS_UP` | `3` | Room: at least this many of index..pinky tips risen |
-| `ROOM_OPEN` | `0.6` | Room: mean fingertip distance to palm centre `> ROOM_OPEN × hand size` (claw, not a fist) |
-| `ROOM_SPREAD` | `1.2` | Room: `dist(tip8, tip20) > ROOM_SPREAD × dist(mcp5, mcp17)`, fingers fanned |
+| `ROOM_TIP_DROP` | `0.1` | Room: fingertip below its MCP by more than `ROOM_TIP_DROP × hand size` (curved down) |
+| `ROOM_TIPS_DOWN` | `3` | Room: at least this many of index..pinky tips dropped |
+| `ROOM_SPREAD` | `1.3` | Room: `dist(tip8, tip20) > ROOM_SPREAD × dist(mcp5, mcp17)`, fingers fanned |
 | `ROOM_THUMB` | `0.5` | Room: thumb spread, `dist(tip4, mcp5) > ROOM_THUMB × hand size` |
 
 ---
@@ -116,7 +116,7 @@ Plain geometry on landmarks, scale-invariant (ratios, aspect-corrected). Rules l
 - finger extended: `dist(tip, wrist) > dist(pip, wrist) × 1.1`
 - **Instant Transmission**: index + middle up, ring + pinky down, both tips inside the forehead zone (face landmarks 10/151, radius from face width)
 - **Gojo**: same finger pose, tips crossed (left/right order swapped vs. knuckles) or pressed together
-- **Room**: palm normal `(lm5−lm0)×(lm17−lm0)` mostly vertical (`|ny|`, orientation-agnostic), ≥3 fingertips risen above their knuckles (palm-up cup; palm-down fails), fingertips well away from the palm centre (claw, not a fist), fingers fanned (`tip8↔tip20` vs `mcp5↔mcp17`), thumb spread, wrist not in the bottom `LOW_ZONE`
+- **Room**: palm normal `(lm5−lm0)×(lm17−lm0)` mostly vertical (`|ny|`, orientation-agnostic), ≥3 fingertips below their knuckles (palm-down bowl, not palm-up cup), fingers fanned (`tip8↔tip20` vs `mcp5↔mcp17`), thumb spread, wrist not in the bottom `LOW_ZONE`
 
 ### 4. State machine
 ```
