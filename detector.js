@@ -253,8 +253,9 @@ const RULES = [
   { id: 'HOLLOW_PURPLE', hands: 1,
     match(h, F) { const fx = fwdExt(h), lm = h.lm, thumb = d(lm[4], lm[5]) / h.hs, spread = d(lm[8], lm[12]) / h.palm, low = palmMid(h).y > 1 - TH.LOW_ZONE, tm = tipMid(h);
       const notCrossed = Math.sign(lm[8].x - lm[12].x) === Math.sign(lm[5].x - lm[9].x);
-      if (fx.i && fx.m) F.zones.push({ x: tm.x, y: tm.y, r: 0.5 * h.hs, label: `HP i m r p ${+fx.i}${+fx.m}${+fx.r}${+fx.p} th ${thumb.toFixed(2)} sp ${spread.toFixed(2)}` });
-      if (!(fx.i && fx.m && !fx.r && !fx.p && thumb > TH.HP_THUMB && spread > TH.HP_SPREAD && notCrossed && !low)) return null;
+      if (fx.i && fx.m) F.zones.push({ x: tm.x, y: tm.y, r: 0.5 * h.hs, label: `HP i m r p ${+fx.i}${+fx.m}${+h.ext.r}${+h.ext.p} th ${thumb.toFixed(2)} sp ${spread.toFixed(2)}` });
+      // curled check uses the plain 2D test: fwdExt's "short but straight" path reads a folded ring/pinky as extended
+      if (!(fx.i && fx.m && !h.ext.r && !h.ext.p && thumb > TH.HP_THUMB && spread > TH.HP_SPREAD && notCrossed && !low)) return null;
       const fz = F.forehead(), R = fz && fz.r * TH.IT_TIP_R; // tips on the forehead = INSTANT_TRANSMISSION
       return fz && d(lm[8], fz.c) < R && d(lm[12], fz.c) < R ? null : hpHit(h); },
     loose(h) { const fx = fwdExt(h); return fx.i && fx.m && palmMid(h).y <= 1 - TH.LOW_ZONE ? hpHit(h) : null; } },
