@@ -4,19 +4,19 @@ Leave video calls with an anime-style exit. Hold a hand gesture in front of your
 
 Works on **Microsoft Teams web** (`teams.microsoft.com`, `teams.live.com`, `teams.cloud.microsoft`) and **Google Meet** (`meet.google.com`) in Chrome/Edge. Everything runs locally in the browser; no server, no network calls.
 
-| Gesture | Effect |
-|---|---|
-| Index + middle finger on your forehead | **Instant Transmission**: fingertip glow, flicker, you vanish from the frame |
-| Index + middle crossed (or pressed together), hand raised | **Domain Expansion**: black void expands from your hand, starfield, everything goes dark |
-| **Room**: one hand palm-down, all five fingers spread and curved down like an upside-down bowl, hand above the bottom quarter of the frame | **Room**: particle ring, cyan dome expands past the frame, frame is sliced into tiles, you get scattered, tiles drift apart into black. Needs captured background |
-| **Shadow Clone**: both hands, index + middle pressed together on each, one pair vertical and the other horizontal forming a "+", crossing near their middles | **Shadow clone**: smoke puffs leave copies of you, the copies multiply, then everyone (you included) bursts into smoke and the room is empty. Needs captured background |
-| **Bankai**: one closed fist raised beside your head at about eye level, back of the hand to the camera, normal distance | **Bankai**: dark red aura rises around you, the room darkens, debris lifts, a black-red blade of light shoots horizontally out of your fist, then a slash splits the frame apart into black |
-| **Kamui**: index, middle and ring fingers laid over one eye | **Kamui**: a dark spinning vortex opens around your visible eye, the view zooms in as it spirals faster, then a black core swallows the frame |
-| **Hollow Red**: both hands pointing with just the index finger, index tips held close together | **Red**: a red orb on one fingertip and a blue orb on the other spiral into each other and fuse into a crimson singularity that bends light and swallows the frame; black with a fading crimson ring |
-| **Hollow Purple**: one hand making a V, index and middle spread apart, thumb out to the side, ring + pinky curled, hand raised and held still | **Purple**: violet lightning gathers in the gap between the fingers, condenses with a shockwave into a black sphere with a blazing photon ring, grows into a black hole with a glowing accretion disk that swallows the frame; black with a fading purple ring |
-| **Reversal Red**: finger gun, thumb up, index pointing at the camera (or angled), middle/ring/pinky curled, held still (anywhere in the frame) | **Reversal**: a red dot charges on your fingertip with sparks and crackling arcs, a recoil flash, then a beam fires at the viewer and burns a hole that floods the screen red; near-black red |
+| | Gesture | Effect |
+|---|---|---|
+| <img src="docs/gestures/INSTANT_TRANSMISSION.svg" width="220" alt="INSTANT_TRANSMISSION"> | Index + middle finger on your forehead | **Instant Transmission**: fingertip glow, flicker, you vanish from the frame |
+| <img src="docs/gestures/GOJO.svg" width="220" alt="GOJO"> | Index + middle crossed (or pressed together), hand raised | **Domain Expansion**: black void expands from your hand, starfield, everything goes dark |
+| <img src="docs/gestures/ROOM.svg" width="220" alt="ROOM"> | **Room**: one hand palm-down, all five fingers spread and curved down like an upside-down bowl, hand above the bottom quarter of the frame | **Room**: particle ring, cyan dome expands past the frame, frame is sliced into tiles, you get scattered, tiles drift apart into black. Needs captured background |
+| <img src="docs/gestures/SHADOW_CLONE.svg" width="220" alt="SHADOW_CLONE"> | **Shadow Clone**: both hands, index + middle pressed together on each, one pair vertical and the other horizontal forming a "+", crossing near their middles | **Shadow clone**: smoke puffs leave copies of you, the copies multiply, then everyone (you included) bursts into smoke and the room is empty. Needs captured background |
+| <img src="docs/gestures/BANKAI.svg" width="220" alt="BANKAI"> | **Bankai**: one closed fist raised beside your head at about eye level, back of the hand to the camera, normal distance | **Bankai**: dark red aura rises around you, the room darkens, debris lifts, a black-red blade of light shoots horizontally out of your fist, then a slash splits the frame apart into black |
+| <img src="docs/gestures/KAMUI.svg" width="220" alt="KAMUI"> | **Kamui**: index, middle and ring fingers laid over one eye | **Kamui**: a dark spinning vortex opens around your visible eye, the view zooms in as it spirals faster, then a black core swallows the frame |
+| <img src="docs/gestures/HOLLOW_RED.svg" width="220" alt="HOLLOW_RED"> | **Hollow Red**: both hands pointing with just the index finger, index tips held close together | **Red**: a red orb on one fingertip and a blue orb on the other spiral into each other and fuse into a crimson singularity that bends light and swallows the frame; black with a fading crimson ring |
+| <img src="docs/gestures/HOLLOW_PURPLE.svg" width="220" alt="HOLLOW_PURPLE"> | **Hollow Purple**: one hand making a V, index and middle spread apart, thumb out to the side, ring + pinky curled, hand raised and held still | **Purple**: violet lightning gathers in the gap between the fingers, condenses with a shockwave into a black sphere with a blazing photon ring, grows into a black hole with a glowing accretion disk that swallows the frame; black with a fading purple ring |
+| <img src="docs/gestures/REVERSAL_RED.svg" width="220" alt="REVERSAL_RED"> | **Reversal Red**: finger gun, thumb up, index pointing at the camera (or angled), middle/ring/pinky curled, held still (anywhere in the frame) | **Reversal**: a red dot charges on your fingertip with sparks and crackling arcs, a recoil flash, then a beam fires at the viewer and burns a hole that floods the screen red; near-black red |
 
-All visuals and sounds are generated in code. No third-party character art, clips, or audio are included.
+All effect visuals and sounds are generated in code; the extension ships no third-party character art, clips, or audio. The illustrations above live in `docs/gestures/` (see [Third-party](#third-party)).
 
 ---
 
@@ -215,5 +215,6 @@ Open DevTools on the meeting tab, filter the console by `[TLFX]`, expand the `TL
 ## Third-party
 
 - [MediaPipe Tasks Vision](https://github.com/google-ai-edge/mediapipe) (`@mediapipe/tasks-vision@0.10.35`) and its models: Apache License 2.0.
+- Gesture illustrations (`docs/gestures/`, README only, not shipped in the extension): hand drawings cut from the public-domain ASL fingerspelling chart [Asl_alphabet_gallaudet_ann.svg](https://commons.wikimedia.org/wiki/File:Asl_alphabet_gallaudet_ann.svg) on Wikimedia Commons; the Room illustration is a third-party reference picture (`docs/gestures/src/room-hand.png`), used here as documentation only. Regenerate with `node docs/gestures/gen.js`.
 
 Personal project. Not affiliated with Microsoft, Google, or any anime franchise.
